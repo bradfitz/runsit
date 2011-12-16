@@ -19,6 +19,7 @@ package main
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -72,6 +73,7 @@ func (w *pollingDirWatcher) poll() {
 			continue
 		}
 		fis, err := d.Readdir(-1)
+		d.Close()
 		if err != nil {
 			logger.Printf("Error reading directory %q: %v", w.dir, err)
 			time.Sleep(15 * time.Second)
@@ -86,9 +88,26 @@ func (w *pollingDirWatcher) poll() {
 			if em, ok := last[name]; ok && em.Equal(m) {
 				continue
 			}
-			logger.Printf("name = %q, modtime = %v", name, m)
+			logger.Printf("Updated config file: name = %q, modtime = %v", name, m)
 			last[name] = m
+			w.c <- diskFile{
+				baseName: name[:len(name)-len(".json")],
+				fileName: filepath.Join(w.dir, name),
+				fi:       fi,
+			}
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+type diskFile struct {
+	baseName string // base name, without .json suffix
+	fileName string // relative path to *.json file
+	fi       os.FileInfo
+}
+
+func (f diskFile) Name() string { return f.baseName }
+
+func (f diskFile) Open() (io.ReadCloser, error) {
+	return os.Open(f.fileName)
 }
