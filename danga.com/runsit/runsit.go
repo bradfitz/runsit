@@ -22,6 +22,7 @@ package main
 
 import (
 	"bufio"
+	"container/list"
 	"flag"
 	"fmt"
 	"io"
@@ -51,14 +52,41 @@ var (
 	tasks   = make(map[string]*Task)
 )
 
+// A Task is a named daemon. A single instance of Task exists for the
+// life of the runsit daemon, despite how many times the task has
+// failed and restarted.
 type Task struct {
+	// Immutable:
 	Name     string
 	controlc chan interface{}
 
 	// State owned by loop's goroutine:
-	config    jsonconfig.Obj // last valid config
+	config   jsonconfig.Obj // last valid config
+	running  *TaskInstance
+	failures []*TaskInstance // last few failures, oldest first.
+}
+
+// TaskInstance is a particular instance of a running Task.
+type TaskInstance struct {
+	task      *Task
+	config    jsonconfig.Obj
 	cmd       *exec.Cmd
-	lastStart time.Time
+	startTime time.Time
+	output    TaskOutput
+}
+
+// ID returns a unique ID string for this task instance.
+func (in *TaskInstance) ID() string {
+	// TODO: include pid if available
+	return fmt.Sprintf("%s/%d", in.task.Name, in.startTime.Unix())
+}
+
+func (in *TaskInstance) Printf(format string, args ...interface{}) {
+	logger.Printf(fmt.Sprintf("Task %s: %s", in.ID(), format), args...)
+}
+
+type TaskOutput struct {
+	lines *list.List // of *outputMessage
 }
 
 func NewTask(name string) *Task {
@@ -84,8 +112,8 @@ func (t *Task) loop() {
 			t.update(m.tf)
 		case stopMessage:
 			t.stop()
-		case outputMessage:
-			t.Printf("Got output: %#v", m)
+		case *outputMessage:
+			t.Printf("Got output: %#v", *m)
 		case waitMessage:
 			t.onTaskFinished(m)
 		}
@@ -93,15 +121,16 @@ func (t *Task) loop() {
 }
 
 type waitMessage struct {
-	cmd *exec.Cmd
-	err error // return from cmd.Wait(), nil, *exec.ExitError, or other type
+	instance *TaskInstance
+	err      error // return from cmd.Wait(), nil, *exec.ExitError, or other type
 }
 
 type outputMessage struct {
-	cmd      *exec.Cmd // instance of command that spoke
-	name     string    // "stdout" or "stderr"
-	isPrefix bool      // truncated line? (too long)
-	data     string    // line or prefix of line
+	t        time.Time
+	instance *TaskInstance
+	name     string // "stdout" or "stderr"
+	isPrefix bool   // truncated line? (too long)
+	data     string // line or prefix of line
 }
 
 type updateMessage struct {
@@ -121,9 +150,16 @@ func (t *Task) Update(tf TaskFile) {
 // run in Task.loop
 func (t *Task) onTaskFinished(m waitMessage) {
 	t.Printf("Task exited; err=%v", m.err)
-	if m.cmd == t.cmd {
-		t.cmd = nil
+	if m.instance == t.running {
+		t.running = nil
 	}
+	const keepFailures = 5
+	if len(t.failures) == keepFailures {
+		copy(t.failures, t.failures[1:])
+		t.failures = t.failures[:keepFailures-1]
+	}
+	t.failures = append(t.failures, m.instance)
+
 	if m.err == nil {
 		// TODO: vary sleep time (but not in this goroutine)
 		// based on how process ended and when it was last
@@ -180,6 +216,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		t.Printf("configuration error: %v", err)
 		return
 	}
+	t.config = jc
 
 	_, err := os.Stat(bin)
 	if err != nil {
@@ -187,9 +224,14 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		return
 	}
 
-	t.config = jc
+	instance := &TaskInstance{
+		task:      t,
+		config:    jc,
+		startTime: time.Now(),
+		cmd:       exec.Command(bin, args...),
+	}
 
-	cmd := exec.Command(bin, args...)
+	cmd := instance.cmd
 	cmd.Dir = cwd
 	cmd.Env = env
 
@@ -205,7 +247,6 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		return
 	}
 
-	t.lastStart = time.Now()
 	err = cmd.Start()
 	if err != nil {
 		outPipe.Close()
@@ -213,29 +254,30 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		t.Printf("Error starting: %v", err)
 		return
 	}
-	t.cmd = cmd
-	go t.watchPipe(cmd, outPipe, "stdout")
-	go t.watchPipe(cmd, errPipe, "stderr")
-	go t.watchCommand(cmd)
+	t.running = instance
+	go instance.watchPipe(outPipe, "stdout")
+	go instance.watchPipe(errPipe, "stderr")
+	go instance.awaitDeath()
 }
 
 // run in its own goroutine
-func (t *Task) watchCommand(cmd *exec.Cmd) {
-	err := cmd.Wait()
-	t.controlc <- waitMessage{cmd: cmd, err: err}
+func (in *TaskInstance) awaitDeath() {
+	err := in.cmd.Wait()
+	in.task.controlc <- waitMessage{instance: in, err: err}
 }
 
 // run in its own goroutine
-func (t *Task) watchPipe(cmd *exec.Cmd, r io.Reader, name string) {
+func (in *TaskInstance) watchPipe(r io.Reader, name string) {
 	br := bufio.NewReader(r)
 	for {
 		sl, isPrefix, err := br.ReadLine()
 		if err != nil {
-			t.Printf("pipe %q closed: %v", name, err)
+			in.Printf("pipe %q closed: %v", name, err)
 			return
 		}
-		t.controlc <- outputMessage{
-			cmd:      cmd,
+		in.task.controlc <- &outputMessage{
+			t:        time.Now(),
+			instance: in,
 			name:     name,
 			isPrefix: isPrefix,
 			data:     string(sl),
@@ -250,13 +292,14 @@ func (t *Task) Stop() {
 
 // runs in Task.loop
 func (t *Task) stop() {
-	if t.cmd == nil {
+	in := t.running
+	if in == nil {
 		return
 	}
-	t.Printf("sending SIGKILL")
+	in.Printf("sending SIGKILL")
 	// TODO: more graceful kill types
-	t.cmd.Process.Kill()
-	t.cmd = nil
+	in.cmd.Process.Kill()
+	t.running = nil
 }
 
 func (t *Task) Status() string {
@@ -267,8 +310,9 @@ func (t *Task) Status() string {
 
 // runs in Task.loop
 func (t *Task) status() string {
-	if t.cmd != nil {
-		d := time.Now().Sub(t.lastStart)
+	in := t.running
+	if in != nil {
+		d := time.Now().Sub(in.startTime)
 		return fmt.Sprintf("running; for %v", d)
 	}
 	if t.config == nil {
