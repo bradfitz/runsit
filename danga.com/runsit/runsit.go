@@ -82,8 +82,15 @@ func (t *Task) loop() {
 			t.stop()
 		case outputMessage:
 			t.Printf("Got output: %#v", m)
+		case waitMessage:
+			t.onTaskFinished(m)
 		}
 	}
+}
+
+type waitMessage struct {
+	cmd *exec.Cmd
+	err error // return from cmd.Wait(), nil, *exec.ExitError, or other type
 }
 
 type outputMessage struct {
@@ -97,12 +104,27 @@ type updateMessage struct {
 	tf TaskFile
 }
 
-type stopMessage struct {
-
-}
+type stopMessage struct{}
 
 func (t *Task) Update(tf TaskFile) {
 	t.controlc <- updateMessage{tf}
+}
+
+// run in task's goroutine
+func (t *Task) onTaskFinished(m waitMessage) {
+	t.Printf("Task exited; err=%v", m.err)
+	if m.cmd == t.cmd {
+		t.cmd = nil
+	}
+	if m.err == nil {
+		// TODO: vary sleep time (but not in this goroutine)
+		// based on how process ended and when it was last
+		// started (prevent crash/restart loops)
+	}
+	if t.config != nil {
+		t.Printf("Restarting")
+		t.updateFromConfig(t.config)
+	}
 }
 
 // run in task's goroutine
@@ -114,7 +136,12 @@ func (t *Task) update(tf TaskFile) {
 		t.Printf("Bad config file: %v", err)
 		return
 	}
-	t.config = jc
+	t.updateFromConfig(jc)
+}
+
+func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
+	t.config = nil
+	t.stop()
 
 	ports := jc.OptionalObject("ports")
 	_ = ports
@@ -134,7 +161,6 @@ func (t *Task) update(tf TaskFile) {
 	}
 	envMap := jc.OptionalObject("env")
 	for k, v := range envMap {
-		t.Printf("env %q = %q", k, v)
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
@@ -146,11 +172,13 @@ func (t *Task) update(tf TaskFile) {
 		return
 	}
 
-	_, err = os.Stat(bin)
+	_, err := os.Stat(bin)
 	if err != nil {
 		t.Printf("stat of binary %q failed: %v", bin, err)
 		return
 	}
+
+	t.config = jc
 
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = cwd
@@ -178,6 +206,12 @@ func (t *Task) update(tf TaskFile) {
 	t.cmd = cmd
 	go t.watchPipe(cmd, outPipe, "stdout")
 	go t.watchPipe(cmd, errPipe, "stderr")
+	go t.watchCommand(cmd)
+}
+
+func (t *Task) watchCommand(cmd *exec.Cmd) {
+	err := cmd.Wait()
+	t.controlc <- waitMessage{cmd: cmd, err: err}
 }
 
 func (t *Task) watchPipe(cmd *exec.Cmd, r io.Reader, name string) {
