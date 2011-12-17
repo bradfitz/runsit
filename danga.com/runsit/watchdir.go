@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,8 +34,9 @@ type TaskFile interface {
 	// prefix or .json suffix.
 	Name() string
 
-	// Open opens the JSON configuration file for reading.
-	Open() (io.ReadCloser, error)
+	// ConfigFileName returns the filename of the JSON file to read.
+	// TODO: make this more abstract, a ReadSeekCloser instead?
+	ConfigFileName() string
 }
 
 var osDirWatcher DirWatcher // if nil, default polling impl is used
@@ -106,8 +106,5 @@ type diskFile struct {
 	fi       os.FileInfo
 }
 
-func (f diskFile) Name() string { return f.baseName }
-
-func (f diskFile) Open() (io.ReadCloser, error) {
-	return os.Open(f.fileName)
-}
+func (f diskFile) Name() string           { return f.baseName }
+func (f diskFile) ConfigFileName() string { return f.fileName }

@@ -19,6 +19,7 @@ package jsonconfig
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -54,8 +55,8 @@ type configParser struct {
 var envPattern = regexp.MustCompile(`\$\{[A-Za-z0-9_]+\}`)
 
 // Decodes and evaluates a json config file, watching for include cycles.
-func (c *configParser) recursiveReadJSON(configPath string) (decodedObject map[string]interface{}, err error) {
-
+func (c *configParser) recursiveReadJSON(configPath string) (map[string]interface{}, error) {
+	var err error
 	configPath, err = filepath.Abs(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to expand absolute path for %s", configPath)
@@ -69,15 +70,18 @@ func (c *configParser) recursiveReadJSON(configPath string) (decodedObject map[s
 	c.includeStack.Push(configPath)
 	defer c.includeStack.Pop()
 
-	var f *os.File
-	if f, err = os.Open(configPath); err != nil {
+	f, err := os.Open(configPath)
+	if err != nil {
 		return nil, fmt.Errorf("Failed to open config: %s, %v", configPath, err)
 	}
 	defer f.Close()
+	return c.readJSON(f.Name(), f)
+}
 
-	decodedObject = make(map[string]interface{})
+func (c *configParser) readJSON(name string, f io.ReadSeeker) (map[string]interface{}, error) {
+	decodedObject := make(map[string]interface{})
 	dj := json.NewDecoder(f)
-	if err = dj.Decode(&decodedObject); err != nil {
+	if err := dj.Decode(&decodedObject); err != nil {
 		extra := ""
 		if serr, ok := err.(*json.SyntaxError); ok {
 			if _, serr := f.Seek(0, os.SEEK_SET); serr != nil {
@@ -88,12 +92,12 @@ func (c *configParser) recursiveReadJSON(configPath string) (decodedObject map[s
 				line, col, serr.Offset, highlight)
 		}
 		return nil, fmt.Errorf("error parsing JSON object in config file %s%s\n%v",
-			f.Name(), extra, err)
+			name, extra, err)
 	}
 
-	if err = c.evaluateExpressions(decodedObject); err != nil {
+	if err := c.evaluateExpressions(decodedObject); err != nil {
 		return nil, fmt.Errorf("error expanding JSON config expressions in %s:\n%v",
-			f.Name(), err)
+			name, err)
 	}
 
 	return decodedObject, nil
