@@ -49,7 +49,6 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	for _, env := range os.Environ() {
 		fmt.Fprintf(w, "%s\n", env)
 	}
-
 }
 
 func logNoise() {

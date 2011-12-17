@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 
 	"danga.com/runsit/jsonconfig"
 )
@@ -55,8 +56,9 @@ type Task struct {
 	controlc chan interface{}
 
 	// State owned by loop's goroutine:
-	config jsonconfig.Obj // last valid config
-	cmd    *exec.Cmd
+	config    jsonconfig.Obj // last valid config
+	cmd       *exec.Cmd
+	lastStart time.Time
 }
 
 func NewTask(name string) *Task {
@@ -76,6 +78,8 @@ func (t *Task) loop() {
 	t.Printf("Starting")
 	for cm := range t.controlc {
 		switch m := cm.(type) {
+		case statusRequestMessage:
+			m.resCh <- t.status()
 		case updateMessage:
 			t.update(m.tf)
 		case stopMessage:
@@ -106,11 +110,15 @@ type updateMessage struct {
 
 type stopMessage struct{}
 
+type statusRequestMessage struct {
+	resCh chan<- string
+}
+
 func (t *Task) Update(tf TaskFile) {
 	t.controlc <- updateMessage{tf}
 }
 
-// run in task's goroutine
+// run in Task.loop
 func (t *Task) onTaskFinished(m waitMessage) {
 	t.Printf("Task exited; err=%v", m.err)
 	if m.cmd == t.cmd {
@@ -127,7 +135,7 @@ func (t *Task) onTaskFinished(m waitMessage) {
 	}
 }
 
-// run in task's goroutine
+// run in Task.loop
 func (t *Task) update(tf TaskFile) {
 	t.config = nil
 	jc, err := jsonconfig.ReadFile(tf.ConfigFileName())
@@ -139,6 +147,7 @@ func (t *Task) update(tf TaskFile) {
 	t.updateFromConfig(jc)
 }
 
+// run in Task.loop
 func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	t.config = nil
 	t.stop()
@@ -196,6 +205,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		return
 	}
 
+	t.lastStart = time.Now()
 	err = cmd.Start()
 	if err != nil {
 		outPipe.Close()
@@ -209,11 +219,13 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	go t.watchCommand(cmd)
 }
 
+// run in its own goroutine
 func (t *Task) watchCommand(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	t.controlc <- waitMessage{cmd: cmd, err: err}
 }
 
+// run in its own goroutine
 func (t *Task) watchPipe(cmd *exec.Cmd, r io.Reader, name string) {
 	br := bufio.NewReader(r)
 	for {
@@ -236,6 +248,7 @@ func (t *Task) Stop() {
 	t.controlc <- stopMessage{}
 }
 
+// runs in Task.loop
 func (t *Task) stop() {
 	if t.cmd == nil {
 		return
@@ -246,14 +259,43 @@ func (t *Task) stop() {
 	t.cmd = nil
 }
 
+func (t *Task) Status() string {
+	ch := make(chan string, 1)
+	t.controlc <- statusRequestMessage{resCh: ch}
+	return <-ch
+}
+
+// runs in Task.loop
+func (t *Task) status() string {
+	if t.cmd != nil {
+		d := time.Now().Sub(t.lastStart)
+		return fmt.Sprintf("running; for %v", d)
+	}
+	if t.config == nil {
+		return "not running, no valid config"
+	}
+	// TODO: flesh these not running states out.
+	// e.g. intentionaly stopped, how long we're pausing before
+	// next re-start attempt, etc.
+	return "not running; valid config"
+}
+
 func watchConfigDir() {
 	for tf := range dirWatcher().Updates() {
-		t := getTask(tf.Name())
+		t := GetOrMakeTask(tf.Name())
 		go t.Update(tf)
 	}
 }
 
-func getTask(name string) *Task {
+func GetTask(name string) (*Task, bool) {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	t, ok := tasks[name]
+	return t, ok
+}
+
+// GetOrMakeTask returns or create the named task.
+func GetOrMakeTask(name string) *Task {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 	t, ok := tasks[name]
@@ -262,6 +304,17 @@ func getTask(name string) *Task {
 		tasks[name] = t
 	}
 	return t
+}
+
+// GetTasks returns all known tasks.
+func GetTasks() []*Task {
+	ts := []*Task{}
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	for _, t := range tasks {
+		ts = append(ts, t)
+	}
+	return ts
 }
 
 func main() {
