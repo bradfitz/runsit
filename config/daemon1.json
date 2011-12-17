@@ -5,7 +5,7 @@
   "env": {
       "FOO": "BAR"
   },
-  "binary": "./danga.com/runsit/test/daemon1/daemon1",
+  "binary": "./danga.com/runsit/test/daemon/testdaemon",
   "args": [
     "--port", ["_port", "web"]
   ],

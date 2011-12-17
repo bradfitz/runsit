@@ -3,4 +3,5 @@
 *.8
 _obj
 danga.com/runsit/runsit
+danga.com/runsit/test/daemon/testdaemon
 
