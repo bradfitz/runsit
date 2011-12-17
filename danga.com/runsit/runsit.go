@@ -21,8 +21,10 @@ limitations under the License.
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -54,7 +56,7 @@ type Task struct {
 
 	// State owned by loop's goroutine:
 	config jsonconfig.Obj // last valid config
-	p      *exec.Cmd
+	cmd    *exec.Cmd
 }
 
 func NewTask(name string) *Task {
@@ -78,8 +80,17 @@ func (t *Task) loop() {
 			t.update(m.tf)
 		case stopMessage:
 			t.stop()
+		case outputMessage:
+			t.Printf("Got output: %#v", m)
 		}
 	}
+}
+
+type outputMessage struct {
+	cmd      *exec.Cmd // instance of command that spoke
+	name     string    // "stdout" or "stderr"
+	isPrefix bool      // truncated line? (too long)
+	data     string    // line or prefix of line
 }
 
 type updateMessage struct {
@@ -104,7 +115,87 @@ func (t *Task) update(tf TaskFile) {
 		return
 	}
 	t.config = jc
-	t.Printf("new config: %#v", jc)
+
+	ports := jc.OptionalObject("ports")
+	_ = ports
+	user := jc.OptionalString("user", "")
+	curUser := os.Getenv("USER")
+	if user == "" {
+		user = curUser
+	}
+	if user != curUser {
+		panic("TODO: switch user")
+	}
+
+	env := []string{}
+	stdEnv := jc.OptionalBool("standardEnv", true)
+	if stdEnv {
+		env = append(env, fmt.Sprintf("USER=%s", user))
+	}
+	envMap := jc.OptionalObject("env")
+	for k, v := range envMap {
+		t.Printf("env %q = %q", k, v)
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	bin := jc.RequiredString("binary")
+	cwd := jc.OptionalString("cwd", "")
+	args := jc.OptionalList("args")
+	if err := jc.Validate(); err != nil {
+		t.Printf("configuration error: %v", err)
+		return
+	}
+
+	_, err = os.Stat(bin)
+	if err != nil {
+		t.Printf("stat of binary %q failed: %v", bin, err)
+		return
+	}
+
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = cwd
+	cmd.Env = env
+
+	outPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Printf("StdoutPipe: %v", err)
+		return
+	}
+	errPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Printf("StderrPipe: %v", err)
+		outPipe.Close()
+		return
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		outPipe.Close()
+		errPipe.Close()
+		t.Printf("Error starting: %v", err)
+		return
+	}
+	t.cmd = cmd
+	go t.watchPipe(cmd, outPipe, "stdout")
+	go t.watchPipe(cmd, errPipe, "stderr")
+}
+
+func (t *Task) watchPipe(cmd *exec.Cmd, r io.Reader, name string) {
+	br := bufio.NewReader(r)
+	for {
+		sl, isPrefix, err := br.ReadLine()
+		if err != nil {
+			t.Printf("pipe %q closed: %v", name, err)
+			return
+		}
+		t.controlc <- outputMessage{
+			cmd:      cmd,
+			name:     name,
+			isPrefix: isPrefix,
+			data:     string(sl),
+		}
+	}
+	panic("unreachable")
 }
 
 func (t *Task) Stop() {
@@ -112,13 +203,13 @@ func (t *Task) Stop() {
 }
 
 func (t *Task) stop() {
-	if t.p == nil {
+	if t.cmd == nil {
 		return
 	}
 	t.Printf("sending SIGKILL")
 	// TODO: more graceful kill types
-	t.p.Process.Kill()
-	t.p = nil
+	t.cmd.Process.Kill()
+	t.cmd = nil
 }
 
 func watchConfigDir() {

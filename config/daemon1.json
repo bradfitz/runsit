@@ -1,13 +1,13 @@
 {
   "user": "bradfitz",
-  "cwd": "TEMPDIR",
+  "cwd": "",
   "standardEnv": false,
   "env": {
       "FOO": "BAR"
   },
   "binary": "./danga.com/runsit/test/daemon/testdaemon",
   "args": [
-    "--port", ["_port", "web"]
+    "--port", "8080"
   ],
   "ports": {
     "web": 8080

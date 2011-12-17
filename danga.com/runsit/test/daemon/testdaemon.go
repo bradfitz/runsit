@@ -18,13 +18,20 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 )
 
 var port = flag.Int("port", 8000, "port")
 
 func main() {
-	http.ListenAndServe(":" + strconv.Itoa(*port), nil)
+	fmt.Fprintf(os.Stderr, "Hello on stderr\n")
+	fmt.Fprintf(os.Stdout, "Hello on stdout\n")
+	http.HandleFunc("/crash", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(os.Stderr, "crashing")
+		os.Exit(2)
+	})
+	http.ListenAndServe(":"+strconv.Itoa(*port), nil)
 }
-
