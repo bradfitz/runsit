@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -59,10 +60,24 @@ func logNoise() {
 }
 
 func main() {
+	flag.Parse()
+
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	if err != nil {
+		log.Fatalf("error listening on port %d: %v", *port, err)
+	}
+
 	fmt.Fprintf(os.Stdout, "Hello on stdout; listening on port %d\n", *port)
 	fmt.Fprintf(os.Stderr, "Hello on stderr\n")
 	go logNoise()
+
 	http.HandleFunc("/crash", crashHandler)
 	http.HandleFunc("/", statusHandler)
-	http.ListenAndServe(":"+strconv.Itoa(*port), nil)
+
+	s := &http.Server{}
+	err = s.Serve(ln)
+	log.Printf("Serve: %v", err)
+	if err != nil {
+		os.Exit(1)
+	}
 }

@@ -112,7 +112,7 @@ type TaskInstance struct {
 	startTime time.Time      // set once; immutable
 	config    jsonconfig.Obj // set once; immutable
 	cmd       *exec.Cmd      // set once; immutable
-	output    TaskOutput // internal locking, safe for concurrent access
+	output    TaskOutput     // internal locking, safe for concurrent access
 }
 
 // ID returns a unique ID string for this task instance.
@@ -207,11 +207,11 @@ type waitMessage struct {
 }
 
 type Line struct {
-	T        time.Time
-	Name     string // "stdout", "stderr", or "system"
-	Data     string // line or prefix of line
+	T    time.Time
+	Name string // "stdout", "stderr", or "system"
+	Data string // line or prefix of line
 
-	isPrefix bool   // truncated line? (too long)
+	isPrefix bool // truncated line? (too long)
 	instance *TaskInstance
 }
 
@@ -278,8 +278,6 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	t.config = nil
 	t.stop()
 
-	ports := jc.OptionalObject("ports")
-	_ = ports
 	user := jc.OptionalString("user", "")
 	curUser := os.Getenv("USER")
 	if user == "" {
@@ -297,6 +295,35 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	envMap := jc.OptionalObject("env")
 	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	extraFiles := []*os.File{}
+	ports := jc.OptionalObject("ports")
+	for portName, vi := range ports {
+		var ln net.Listener
+		var err error
+		switch v := vi.(type) {
+		case float64:
+			ln, err = net.Listen("tcp", ":"+strconv.Itoa(int(v)))
+		case string:
+			ln, err = net.Listen("tcp", v)
+		default:
+			t.Printf("port %q value must be a string or integer", portName)
+			return
+		}
+		if err != nil {
+			t.Printf("port %q listen error: %v", portName, err)
+			return
+		}
+		lf, err := ln.(*net.TCPListener).File()
+		if err != nil {
+			t.Printf("error getting file of port %q listener: %v", portName, err)
+			return
+		}
+		logger.Printf("opened port named %q on %v; fd=%d", portName, vi, lf.Fd())
+		ln.Close()
+		env = append(env, fmt.Sprintf("RUNSIT_PORTFD_%s=%d", portName, 3+len(extraFiles)))
+		extraFiles = append(extraFiles, lf)
 	}
 
 	bin := jc.RequiredString("binary")
@@ -324,6 +351,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	cmd := instance.cmd
 	cmd.Dir = cwd
 	cmd.Env = env
+	cmd.ExtraFiles = extraFiles
 
 	outPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -338,6 +366,9 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	}
 
 	err = cmd.Start()
+	for _, f := range extraFiles {
+		f.Close()
+	}
 	if err != nil {
 		outPipe.Close()
 		errPipe.Close()
