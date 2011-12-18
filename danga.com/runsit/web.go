@@ -27,19 +27,21 @@ import (
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
 	p := writerf(w)
 	p("<html><head><title>runsit</title></head>")
-	p("<body><h1>running tasks</h1><ul>\n")
+	p("<body><h1>runsit Admin UI</h1><h2>running tasks</h2><ul>\n")
 	for _, t := range GetTasks() {
 		p("<li><a href='/task/%s'>%s</a>: %s</li>\n", t.Name, t.Name,
 			html.EscapeString(t.Status()))
 	}
 	p("</ul>\n")
-	p("<h1>runsit log</h1><pre>%s</pre>\n", html.EscapeString(logBuf.String()))
+	p("<h2>runsit log</h2><pre>%s</pre>\n", html.EscapeString(logBuf.String()))
 	p("</body></html>\n")
 }
 
 func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
+	w.Header().Set("Content-Type", "text/html")
 	in, ok := t.RunningInstance()
 	if !ok {
 		http.Error(w, "task not running", 500)
@@ -52,7 +54,7 @@ func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
 	}
 	in.cmd.Process.Kill()
 	p := writerf(w)
-	p("killed pid %d", pid)
+	p("<html><body>killed pid %d.<p>back to <a href='/task/%s'>%s status</a></body></html>", pid, t.Name, t.Name)
 }
 
 func taskView(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +83,7 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 	defer io.Copy(w, &buf)
 
 	p("<html><head><title>runsit; task %q</title></head>", t.Name)
-	p("<body><h1>%v</h1>\n", t.Name)
+	p("<body><div>[<a href='/'>runsit status</a>]</div><h1>%v</h1>\n", t.Name)
 	p("<p>status: %v</p>", html.EscapeString(t.Status()))
 
 	in, ok := t.RunningInstance()

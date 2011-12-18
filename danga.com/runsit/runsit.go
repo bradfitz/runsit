@@ -316,6 +316,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		t.Printf("Error starting: %v", err)
 		return
 	}
+	t.Printf("started with PID %d", instance.Pid())
 	t.running = instance
 	go instance.watchPipe(outPipe, "stdout")
 	go instance.watchPipe(errPipe, "stderr")
@@ -333,6 +334,10 @@ func (in *TaskInstance) watchPipe(r io.Reader, name string) {
 	br := bufio.NewReader(r)
 	for {
 		sl, isPrefix, err := br.ReadLine()
+		if err == io.EOF {
+			// Not worth logging about.
+			return
+		}
 		if err != nil {
 			in.Printf("pipe %q closed: %v", name, err)
 			return
