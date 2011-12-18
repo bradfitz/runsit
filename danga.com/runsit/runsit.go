@@ -77,8 +77,7 @@ type TaskInstance struct {
 
 // ID returns a unique ID string for this task instance.
 func (in *TaskInstance) ID() string {
-	// TODO: include pid if available
-	return fmt.Sprintf("%s/%d", in.task.Name, in.startTime.Unix())
+	return fmt.Sprintf("%s/%d-pid%d", in.task.Name, in.startTime.Unix(), in.Pid())
 }
 
 func (in *TaskInstance) Printf(format string, args ...interface{}) {
@@ -172,7 +171,7 @@ func (t *Task) Update(tf TaskFile) {
 
 // run in Task.loop
 func (t *Task) onTaskFinished(m waitMessage) {
-	t.Printf("Task exited; err=%v", m.err)
+	m.instance.Printf("Task exited; err=%v", m.err)
 	if m.instance == t.running {
 		t.running = nil
 	}

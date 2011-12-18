@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +37,22 @@ func taskList(w http.ResponseWriter, r *http.Request) {
 	p("</ul></body></html>\n")
 }
 
+func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
+	in, ok := t.RunningInstance()
+	if !ok {
+		http.Error(w, "task not running", 500)
+		return
+	}
+	pid, _ := strconv.Atoi(r.FormValue("pid"))
+	if in.Pid() != pid || pid == 0 {
+		http.Error(w, "active task pid doesn't match pid parameter", 500)
+		return
+	}
+	in.cmd.Process.Kill()
+	p := writerf(w)
+	p("killed pid %d", pid)
+}
+
 func taskView(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	taskName := path[len("/task/"):]
@@ -43,6 +60,16 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		http.NotFound(w, r)
 		return
+	}
+	mode := r.FormValue("mode")
+	switch mode {
+	case "kill":
+		killTask(w, r, t)
+		return
+	default:
+		http.Error(w, "unknown mode", 400)
+		return
+	case "":
 	}
 
 	// Buffer to memory so we never block writing to a slow client
@@ -57,8 +84,11 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 
 	in, ok := t.RunningInstance()
 	if ok {
-		p("<p>running instance: pid=%d ", in.Pid())
-		p("</p>")
+		if pid := in.Pid(); pid != 0 {
+			p("<p>running instance: pid=%d ", pid)
+			p("[<a href='/task/%s?pid=%d&mode=kill'>kill</a>] ", taskName, pid)
+			p("</p>")
+		}
 		out := &in.output
 		out.mu.Lock()
 		defer out.mu.Unlock()
