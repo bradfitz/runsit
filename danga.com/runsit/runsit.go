@@ -147,6 +147,16 @@ func (to *TaskOutput) Add(o *outputLine) {
 	}
 }
 
+func (to *TaskOutput) lineSlice() []*outputLine {
+	to.mu.Lock()
+	defer to.mu.Unlock()
+	var lines []*outputLine
+	for e := to.lines.Front(); e != nil; e = e.Next() {
+		lines = append(lines, e.Value.(*outputLine))
+	}
+	return lines
+}
+
 func NewTask(name string) *Task {
 	t := &Task{
 		Name:     name,
@@ -184,11 +194,11 @@ type waitMessage struct {
 }
 
 type outputLine struct {
-	t        time.Time
+	T        time.Time
 	instance *TaskInstance
-	name     string // "stdout" or "stderr"
+	Name     string // "stdout" or "stderr"
 	isPrefix bool   // truncated line? (too long)
-	data     string // line or prefix of line
+	Data     string // line or prefix of line
 }
 
 type updateMessage struct {
@@ -343,11 +353,11 @@ func (in *TaskInstance) watchPipe(r io.Reader, name string) {
 			return
 		}
 		in.output.Add(&outputLine{
-			t:        time.Now(),
+			T:        time.Now(),
 			instance: in,
-			name:     name,
+			Name:     name,
 			isPrefix: isPrefix,
-			data:     string(sl),
+			Data:     string(sl),
 		})
 	}
 	panic("unreachable")
