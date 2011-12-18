@@ -34,7 +34,9 @@ func taskList(w http.ResponseWriter, r *http.Request) {
 		p("<li><a href='/task/%s'>%s</a>: %s</li>\n", t.Name, t.Name,
 			html.EscapeString(t.Status()))
 	}
-	p("</ul></body></html>\n")
+	p("</ul>\n")
+	p("<h1>runsit log</h1><pre>%s</pre>\n", html.EscapeString(logBuf.String()))
+	p("</body></html>\n")
 }
 
 func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
