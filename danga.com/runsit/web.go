@@ -185,7 +185,6 @@ var templateHTML = map[string]string{
 			<div class='{{.Name}}' title='{{.T}}'>{{.Data}}</div>
 		{{end}}
 		</div>
-		{{end}}
 
 		<script>
 		window.addEventListener("load", function() {
@@ -195,6 +194,7 @@ var templateHTML = map[string]string{
 		   }
 		});
 		</script>
+		{{end}}
 `,
 }
 
