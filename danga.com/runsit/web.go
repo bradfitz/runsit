@@ -72,15 +72,25 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := tmplData{
-		"Title": "Task: " + t.Name,
+		"Title": t.Name + " status",
 		"Task":  t,
 	}
 
 	in, ok := t.RunningInstance()
 	if ok {
 		data["PID"] = in.Pid()
-		data["Lines"] = in.output.lineSlice()
+		data["Output"] = in.Output()
 		data["Cmd"] = in.cmd
+	}
+
+	// list failures in reverse-chronological order
+	{
+		f := t.Failures()
+		r := make([]*TaskInstance, len(f))
+		for i := range f {
+			r[len(r)-i-1] = f[i]
+		}
+		data["Failures"] = r
 	}
 
 	drawTemplate(w, "viewTask", data)
@@ -116,8 +126,8 @@ var templates = make(map[string]*template.Template)
 func init() {
 	for name, html := range templateHTML {
 		t := template.New(name).Funcs(templateFuncs)
+		template.Must(t.Parse(html))
 		template.Must(t.Parse(rootHTML))
-		template.Must(t.Parse(`{{define "body"}}` + html + `{{end}}`))
 		templates[name] = t
 	}
 }
@@ -128,7 +138,7 @@ const rootHTML = `
 	<head>
 		<title>{{.Title}} - runsit</title>
 		<style>
-		#output {
+		.output {
 		   font-family: monospace;
 		   font-size: 10pt;
 		   border: 2px solid gray;
@@ -136,9 +146,11 @@ const rootHTML = `
 		   overflow: scroll;
 		   max-height: 25em;
 		}
-
-		#output div.stderr {
+		.output div.stderr {
 		   color: #c00;
+		}
+		.output div.system {
+		   color: #00c;
 		}
 		</style>
 	</head>
@@ -152,49 +164,61 @@ const rootHTML = `
 
 var templateHTML = map[string]string{
 	"taskList": `
+	{{define "body"}}
 		<h2>Running</h2>
 		<ul>
 		{{range .Tasks}}
-			<li><a href="/task/{{.Name}}">{{.Name}}</a>: {{.Status}}</li>
+			<li><a href='/task/{{.Name}}'>{{.Name}}</a>: {{.Status}}</li>
 		{{end}}
 		</ul>
 		<h2>Log</h2>
 		<pre>{{.Log}}</pre>
+	{{end}}
 `,
 	"killTask": `
+	{{define "body"}}
 		<p>Killed pid {{.PID}}.</p>
 		<p>Back to <a href='/task/{{.Task.Name}}'>{{.Task.Name}} status</a>.</p>
+	{{end}}
 `,
 	"viewTask": `
+	{{define "body"}}
 		<div>[<a href='/'>Tasks</a>]</div>
-		<p>Status: {{.Task.Status}}</p>
-
-		{{if .PID}}
-		<p>running instance: pid={{.PID}}
-		[<a href='/task/{{.Task.Name}}?pid={{.PID}}&mode=kill'>kill</a>]</p>
-		{{end}}
+		<p>{{.Task.Status}}</p>
 
 		{{with .Cmd}}
 		{{/* TODO: embolden arg[0] */}}
 		<p>command: {{range .Args}}{{maybeQuote .}} {{end}}</p>
 		{{end}}
 
-		{{with .Lines}}
-		<div id='output'>
+		{{if .PID}}
+		<h2>Running Instance</h2>
+		<p>PID={{.PID}} [<a href='/task/{{.Task.Name}}?pid={{.PID}}&mode=kill'>kill</a>]</p>
+		{{end}}
+
+		{{with .Output}}{{template "output" .}}{{end}}
+
+		{{with .Failures}}
+		<h2>Failures</h2>
+		{{range .}}{{template "output" .Output}}{{end}}
+		{{end}}
+
+		<script>
+		window.addEventListener("load", function() {
+		   var d = document.getElementsByClassName("output");
+		   for (var i=0; i < d.length; i++) {
+		     d[i].scrollTop = d[i].scrollHeight;
+		   }
+		});
+		</script>
+	{{end}}
+	{{define "output"}}
+		<div class='output'>
 		{{range .}}
 			<div class='{{.Name}}' title='{{.T}}'>{{.Data}}</div>
 		{{end}}
 		</div>
-
-		<script>
-		window.addEventListener("load", function() {
-		   var d = document.getElementById("output");
-		   if (d) {
-		     d.scrollTop = d.scrollHeight;
-		   }
-		});
-		</script>
-		{{end}}
+	{{end}}
 `,
 }
 

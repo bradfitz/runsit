@@ -112,16 +112,23 @@ type TaskInstance struct {
 	startTime time.Time      // set once; immutable
 	config    jsonconfig.Obj // set once; immutable
 	cmd       *exec.Cmd      // set once; immutable
-	output    TaskOutput     // internal locking, safe for concurrent access
+	output    TaskOutput // internal locking, safe for concurrent access
 }
 
 // ID returns a unique ID string for this task instance.
 func (in *TaskInstance) ID() string {
-	return fmt.Sprintf("%s/%d-pid%d", in.task.Name, in.startTime.Unix(), in.Pid())
+	return fmt.Sprintf("%q/%d-pid%d", in.task.Name, in.startTime.Unix(), in.Pid())
 }
 
 func (in *TaskInstance) Printf(format string, args ...interface{}) {
-	logger.Printf(fmt.Sprintf("Task %s: %s", in.ID(), format), args...)
+	msg := fmt.Sprintf(fmt.Sprintf("Task %s: %s", in.ID(), format), args...)
+	in.output.Add(&Line{
+		T:        time.Now(),
+		Name:     "system",
+		Data:     msg,
+		instance: in,
+	})
+	logger.Print(msg)
 }
 
 func (in *TaskInstance) Pid() int {
@@ -131,28 +138,32 @@ func (in *TaskInstance) Pid() int {
 	return in.cmd.Process.Pid
 }
 
+func (in *TaskInstance) Output() []*Line {
+	return in.output.lineSlice()
+}
+
 // TaskOutput is the output
 type TaskOutput struct {
 	mu    sync.Mutex
-	lines list.List // of *outputLine
+	lines list.List // of *Line
 }
 
-func (to *TaskOutput) Add(o *outputLine) {
+func (to *TaskOutput) Add(l *Line) {
 	to.mu.Lock()
 	defer to.mu.Unlock()
-	to.lines.PushBack(o)
+	to.lines.PushBack(l)
 	const maxKeepLines = 5000
 	if to.lines.Len() > maxKeepLines {
 		to.lines.Remove(to.lines.Front())
 	}
 }
 
-func (to *TaskOutput) lineSlice() []*outputLine {
+func (to *TaskOutput) lineSlice() []*Line {
 	to.mu.Lock()
 	defer to.mu.Unlock()
-	var lines []*outputLine
+	var lines []*Line
 	for e := to.lines.Front(); e != nil; e = e.Next() {
-		lines = append(lines, e.Value.(*outputLine))
+		lines = append(lines, e.Value.(*Line))
 	}
 	return lines
 }
@@ -178,6 +189,8 @@ func (t *Task) loop() {
 			m.resCh <- t.status()
 		case runningRequestMessage:
 			m.resCh <- t.running
+		case failuresRequestMessage:
+			m.resCh <- t.failures
 		case updateMessage:
 			t.update(m.tf)
 		case stopMessage:
@@ -193,12 +206,13 @@ type waitMessage struct {
 	err      error // return from cmd.Wait(), nil, *exec.ExitError, or other type
 }
 
-type outputLine struct {
+type Line struct {
 	T        time.Time
-	instance *TaskInstance
-	Name     string // "stdout" or "stderr"
-	isPrefix bool   // truncated line? (too long)
+	Name     string // "stdout", "stderr", or "system"
 	Data     string // line or prefix of line
+
+	isPrefix bool   // truncated line? (too long)
+	instance *TaskInstance
 }
 
 type updateMessage struct {
@@ -213,6 +227,10 @@ type statusRequestMessage struct {
 
 type runningRequestMessage struct {
 	resCh chan<- *TaskInstance
+}
+
+type failuresRequestMessage struct {
+	resCh chan<- []*TaskInstance
 }
 
 func (t *Task) Update(tf TaskFile) {
@@ -352,12 +370,12 @@ func (in *TaskInstance) watchPipe(r io.Reader, name string) {
 			in.Printf("pipe %q closed: %v", name, err)
 			return
 		}
-		in.output.Add(&outputLine{
+		in.output.Add(&Line{
 			T:        time.Now(),
-			instance: in,
 			Name:     name,
-			isPrefix: isPrefix,
 			Data:     string(sl),
+			isPrefix: isPrefix,
+			instance: in,
 		})
 	}
 	panic("unreachable")
@@ -390,6 +408,12 @@ func (t *Task) RunningInstance() (*TaskInstance, bool) {
 	t.controlc <- runningRequestMessage{resCh: ch}
 	in := <-ch
 	return in, in != nil
+}
+
+func (t *Task) Failures() []*TaskInstance {
+	ch := make(chan []*TaskInstance, 1)
+	t.controlc <- failuresRequestMessage{resCh: ch}
+	return <-ch
 }
 
 // runs in Task.loop
