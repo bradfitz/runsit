@@ -68,11 +68,11 @@ type Task struct {
 
 // TaskInstance is a particular instance of a running Task.
 type TaskInstance struct {
-	task      *Task
-	config    jsonconfig.Obj
-	cmd       *exec.Cmd
-	startTime time.Time
-	output    TaskOutput
+	task      *Task          // set once; not goroutine safe (may only call public methods)
+	startTime time.Time      // set once; immutable
+	config    jsonconfig.Obj // set once; immutable
+	cmd       *exec.Cmd      // set once; immutable
+	output    TaskOutput     // internal locking, safe for concurrent access
 }
 
 // ID returns a unique ID string for this task instance.
@@ -85,8 +85,20 @@ func (in *TaskInstance) Printf(format string, args ...interface{}) {
 	logger.Printf(fmt.Sprintf("Task %s: %s", in.ID(), format), args...)
 }
 
+// TaskOutput is the output
 type TaskOutput struct {
-	lines *list.List // of *outputMessage
+	mu    sync.Mutex
+	lines list.List // of *outputLine
+}
+
+func (to *TaskOutput) Add(o *outputLine) {
+	to.mu.Lock()
+	defer to.mu.Unlock()
+	to.lines.PushBack(o)
+	const maxKeepLines = 5000
+	if to.lines.Len() > maxKeepLines {
+		to.lines.Remove(to.lines.Front())
+	}
 }
 
 func NewTask(name string) *Task {
@@ -108,12 +120,12 @@ func (t *Task) loop() {
 		switch m := cm.(type) {
 		case statusRequestMessage:
 			m.resCh <- t.status()
+		case runningRequestMessage:
+			m.resCh <- t.running
 		case updateMessage:
 			t.update(m.tf)
 		case stopMessage:
 			t.stop()
-		case *outputMessage:
-			t.Printf("Got output: %#v", *m)
 		case waitMessage:
 			t.onTaskFinished(m)
 		}
@@ -125,7 +137,7 @@ type waitMessage struct {
 	err      error // return from cmd.Wait(), nil, *exec.ExitError, or other type
 }
 
-type outputMessage struct {
+type outputLine struct {
 	t        time.Time
 	instance *TaskInstance
 	name     string // "stdout" or "stderr"
@@ -141,6 +153,10 @@ type stopMessage struct{}
 
 type statusRequestMessage struct {
 	resCh chan<- string
+}
+
+type runningRequestMessage struct {
+	resCh chan<- *TaskInstance
 }
 
 func (t *Task) Update(tf TaskFile) {
@@ -275,13 +291,13 @@ func (in *TaskInstance) watchPipe(r io.Reader, name string) {
 			in.Printf("pipe %q closed: %v", name, err)
 			return
 		}
-		in.task.controlc <- &outputMessage{
+		in.output.Add(&outputLine{
 			t:        time.Now(),
 			instance: in,
 			name:     name,
 			isPrefix: isPrefix,
 			data:     string(sl),
-		}
+		})
 	}
 	panic("unreachable")
 }
@@ -306,6 +322,13 @@ func (t *Task) Status() string {
 	ch := make(chan string, 1)
 	t.controlc <- statusRequestMessage{resCh: ch}
 	return <-ch
+}
+
+func (t *Task) RunningInstance() (*TaskInstance, bool) {
+	ch := make(chan *TaskInstance, 1)
+	t.controlc <- runningRequestMessage{resCh: ch}
+	in := <-ch
+	return in, in != nil
 }
 
 // runs in Task.loop

@@ -17,20 +17,23 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"html"
+	"io"
 	"net"
 	"net/http"
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "<html><head><title>runsit</title></head>")
-	fmt.Fprintf(w, "<body><h1>running tasks</h1><ul>\n")
+	p := writerf(w)
+	p("<html><head><title>runsit</title></head>")
+	p("<body><h1>running tasks</h1><ul>\n")
 	for _, t := range GetTasks() {
-		fmt.Fprintf(w, "<li><a href='/task/%s'>%s</a>: %s</li>\n", t.Name, t.Name,
+		p("<li><a href='/task/%s'>%s</a>: %s</li>\n", t.Name, t.Name,
 			html.EscapeString(t.Status()))
 	}
-	fmt.Fprintf(w, "</ul></body></html>\n")
+	p("</ul></body></html>\n")
 }
 
 func taskView(w http.ResponseWriter, r *http.Request) {
@@ -42,10 +45,34 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintf(w, "<html><head><title>runsit; task %q</title></head>", t.Name)
-	fmt.Fprintf(w, "<body><h1>%v</h1>\n", t.Name)
-	fmt.Fprintf(w, "status: %v", html.EscapeString(t.Status()))
-	fmt.Fprintf(w, "</body></html>\n")
+	// Buffer to memory so we never block writing to a slow client
+	// while holding the TaskOutput mutex.
+	var buf bytes.Buffer
+	p := writerf(&buf)
+	defer io.Copy(w, &buf)
+
+	p("<html><head><title>runsit; task %q</title></head>", t.Name)
+	p("<body><h1>%v</h1>\n", t.Name)
+	p("status: %v", html.EscapeString(t.Status()))
+
+	in, ok := t.RunningInstance()
+	if ok {
+		out := &in.output
+		out.mu.Lock()
+		defer out.mu.Unlock()
+		for e := out.lines.Front(); e != nil; e = e.Next() {
+			ol := e.Value.(*outputLine)
+			p("<p>%v: %s: %s</p>\n", ol.t, ol.name, html.EscapeString(ol.data))
+		}
+	}
+
+	p("</body></html>\n")
+}
+
+func writerf(w io.Writer) func(string, ...interface{}) {
+	return func(format string, args ...interface{}) {
+		fmt.Fprintf(w, format, args...)
+	}
 }
 
 func runWebServer(ln net.Listener) {
