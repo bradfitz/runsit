@@ -53,10 +53,12 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 
 	p("<html><head><title>runsit; task %q</title></head>", t.Name)
 	p("<body><h1>%v</h1>\n", t.Name)
-	p("status: %v", html.EscapeString(t.Status()))
+	p("<p>status: %v</p>", html.EscapeString(t.Status()))
 
 	in, ok := t.RunningInstance()
 	if ok {
+		p("<p>running instance: pid=%d ", in.Pid())
+		p("</p>")
 		out := &in.output
 		out.mu.Lock()
 		defer out.mu.Unlock()

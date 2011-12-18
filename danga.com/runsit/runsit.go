@@ -85,6 +85,13 @@ func (in *TaskInstance) Printf(format string, args ...interface{}) {
 	logger.Printf(fmt.Sprintf("Task %s: %s", in.ID(), format), args...)
 }
 
+func (in *TaskInstance) Pid() int {
+	if in.cmd == nil || in.cmd.Process == nil {
+		return 0
+	}
+	return in.cmd.Process.Pid
+}
+
 // TaskOutput is the output
 type TaskOutput struct {
 	mu    sync.Mutex
