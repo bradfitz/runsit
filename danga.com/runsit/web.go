@@ -82,7 +82,10 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 	p := writerf(&buf)
 	defer io.Copy(w, &buf)
 
-	p("<html><head><title>runsit; task %q</title></head>", t.Name)
+	p("<html><head><title>runsit; task %q</title>", t.Name)
+	p("<style>\n%s\n</style>\n", css)
+	p("<script>\n%s\n</script>\n", js)
+	p("</head>")
 	p("<body><div>[<a href='/'>runsit status</a>]</div><h1>%v</h1>\n", t.Name)
 	p("<p>status: %v</p>", html.EscapeString(t.Status()))
 
@@ -96,10 +99,12 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 		out := &in.output
 		out.mu.Lock()
 		defer out.mu.Unlock()
+		p("<div id='output'>")
 		for e := out.lines.Front(); e != nil; e = e.Next() {
 			ol := e.Value.(*outputLine)
-			p("<p>%v: %s: %s</p>\n", ol.t, ol.name, html.EscapeString(ol.data))
+			p("<div class='%s' title='%s'>%s</div>\n", ol.name, ol.t, html.EscapeString(ol.data))
 		}
+		p("</div>\n")
 	}
 
 	p("</body></html>\n")
@@ -126,3 +131,29 @@ func runWebServer(ln net.Listener) {
 		logger.Fatalf("webserver exiting: %v", err)
 	}
 }
+
+var css = `
+#output {
+   font-family: monospace;
+   font-size: 10pt;
+   border: 2px solid gray;
+   padding: 0.5em;
+   overflow: scroll;
+   max-height: 25em;
+}
+
+#output div.stderr {
+   color: #c00;
+}
+
+`
+
+var js = `
+window.addEventListener("load", function() {
+   var d = document.getElementById("output");
+   if (d) {
+     d.scrollTop = d.scrollHeight;
+   }
+});
+
+`
