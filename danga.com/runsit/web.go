@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +97,15 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 			p("[<a href='/task/%s?pid=%d&mode=kill'>kill</a>] ", taskName, pid)
 			p("</p>")
 		}
+		p("<p>command: <b>%s</b> ", in.cmd.Path)
+		for _, arg := range in.cmd.Args[1:] {
+			qarg := arg
+			if strings.Contains(arg, " ") || strings.Contains(arg, "\"") {
+				qarg = fmt.Sprintf("%q", qarg)
+			}
+			p("%s ", html.EscapeString(qarg))
+		}
+
 		out := &in.output
 		out.mu.Lock()
 		defer out.mu.Unlock()
