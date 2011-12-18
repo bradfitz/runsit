@@ -17,9 +17,8 @@ limitations under the License.
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"html"
+	"html/template"
 	"io"
 	"net"
 	"net/http"
@@ -28,21 +27,14 @@ import (
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	p := writerf(w)
-	p("<html><head><title>runsit</title></head>")
-	p("<body><h1>runsit Admin UI</h1><h2>running tasks</h2><ul>\n")
-	for _, t := range GetTasks() {
-		p("<li><a href='/task/%s'>%s</a>: %s</li>\n", t.Name, t.Name,
-			html.EscapeString(t.Status()))
-	}
-	p("</ul>\n")
-	p("<h2>runsit log</h2><pre>%s</pre>\n", html.EscapeString(logBuf.String()))
-	p("</body></html>\n")
+	drawTemplate(w, "taskList", tmplData{
+		"Title": "Tasks",
+		"Tasks": GetTasks(),
+		"Log":   logBuf.String(),
+	})
 }
 
 func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
-	w.Header().Set("Content-Type", "text/html")
 	in, ok := t.RunningInstance()
 	if !ok {
 		http.Error(w, "task not running", 500)
@@ -54,13 +46,15 @@ func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
 		return
 	}
 	in.cmd.Process.Kill()
-	p := writerf(w)
-	p("<html><body>killed pid %d.<p>back to <a href='/task/%s'>%s status</a></body></html>", pid, t.Name, t.Name)
+	drawTemplate(w, "killTask", tmplData{
+		"Title": "Kill",
+		"Task":  t,
+		"PID":   pid,
+	})
 }
 
 func taskView(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	taskName := path[len("/task/"):]
+	taskName := r.URL.Path[len("/task/"):]
 	t, ok := GetTask(taskName)
 	if !ok {
 		http.NotFound(w, r)
@@ -77,53 +71,19 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 	case "":
 	}
 
-	// Buffer to memory so we never block writing to a slow client
-	// while holding the TaskOutput mutex.
-	var buf bytes.Buffer
-	p := writerf(&buf)
-	defer io.Copy(w, &buf)
-
-	p("<html><head><title>runsit; task %q</title>", t.Name)
-	p("<style>\n%s\n</style>\n", css)
-	p("<script>\n%s\n</script>\n", js)
-	p("</head>")
-	p("<body><div>[<a href='/'>runsit status</a>]</div><h1>%v</h1>\n", t.Name)
-	p("<p>status: %v</p>", html.EscapeString(t.Status()))
+	data := tmplData{
+		"Title": "Task: " + t.Name,
+		"Task":  t,
+	}
 
 	in, ok := t.RunningInstance()
 	if ok {
-		if pid := in.Pid(); pid != 0 {
-			p("<p>running instance: pid=%d ", pid)
-			p("[<a href='/task/%s?pid=%d&mode=kill'>kill</a>] ", taskName, pid)
-			p("</p>")
-		}
-		p("<p>command: <b>%s</b> ", in.cmd.Path)
-		for _, arg := range in.cmd.Args[1:] {
-			qarg := arg
-			if strings.Contains(arg, " ") || strings.Contains(arg, "\"") {
-				qarg = fmt.Sprintf("%q", qarg)
-			}
-			p("%s ", html.EscapeString(qarg))
-		}
-
-		out := &in.output
-		out.mu.Lock()
-		defer out.mu.Unlock()
-		p("<div id='output'>")
-		for e := out.lines.Front(); e != nil; e = e.Next() {
-			ol := e.Value.(*outputLine)
-			p("<div class='%s' title='%s'>%s</div>\n", ol.name, ol.t, html.EscapeString(ol.data))
-		}
-		p("</div>\n")
+		data["PID"] = in.Pid()
+		data["Lines"] = in.output.lineSlice()
+		data["Cmd"] = in.cmd
 	}
 
-	p("</body></html>\n")
-}
-
-func writerf(w io.Writer) func(string, ...interface{}) {
-	return func(format string, args ...interface{}) {
-		fmt.Fprintf(w, format, args...)
-	}
+	drawTemplate(w, "viewTask", data)
 }
 
 func runWebServer(ln net.Listener) {
@@ -142,28 +102,109 @@ func runWebServer(ln net.Listener) {
 	}
 }
 
-var css = `
-#output {
-   font-family: monospace;
-   font-size: 10pt;
-   border: 2px solid gray;
-   padding: 0.5em;
-   overflow: scroll;
-   max-height: 25em;
+type tmplData map[string]interface{}
+
+func drawTemplate(w io.Writer, name string, data tmplData) {
+	err := templates[name].ExecuteTemplate(w, "root", data)
+	if err != nil {
+		logger.Println(err)
+	}
 }
 
-#output div.stderr {
-   color: #c00;
+var templates = make(map[string]*template.Template)
+
+func init() {
+	for name, html := range templateHTML {
+		t := template.New(name).Funcs(templateFuncs)
+		template.Must(t.Parse(rootHTML))
+		template.Must(t.Parse(`{{define "body"}}` + html + `{{end}}`))
+		templates[name] = t
+	}
 }
 
+const rootHTML = `
+{{define "root"}}
+<html>
+	<head>
+		<title>{{.Title}} - runsit</title>
+		<style>
+		#output {
+		   font-family: monospace;
+		   font-size: 10pt;
+		   border: 2px solid gray;
+		   padding: 0.5em;
+		   overflow: scroll;
+		   max-height: 25em;
+		}
+
+		#output div.stderr {
+		   color: #c00;
+		}
+		</style>
+	</head>
+	<body>
+		<h1>{{.Title}}</h1>
+		{{template "body" .}}
+	</body>
+</html>
+{{end}}
 `
 
-var js = `
-window.addEventListener("load", function() {
-   var d = document.getElementById("output");
-   if (d) {
-     d.scrollTop = d.scrollHeight;
-   }
-});
+var templateHTML = map[string]string{
+	"taskList": `
+		<h2>Running</h2>
+		<ul>
+		{{range .Tasks}}
+			<li><a href="/task/{{.Name}}">{{.Name}}</a>: {{.Status}}</li>
+		{{end}}
+		</ul>
+		<h2>Log</h2>
+		<pre>{{.Log}}</pre>
+`,
+	"killTask": `
+		<p>Killed pid {{.PID}}.</p>
+		<p>Back to <a href='/task/{{.Task.Name}}'>{{.Task.Name}} status</a>.</p>
+`,
+	"viewTask": `
+		<div>[<a href='/'>Tasks</a>]</div>
+		<p>Status: {{.Task.Status}}</p>
 
-`
+		{{if .PID}}
+		<p>running instance: pid={{.PID}}
+		[<a href='/task/{{.Task.Name}}?pid={{.PID}}&mode=kill'>kill</a>]</p>
+		{{end}}
+
+		{{with .Cmd}}
+		{{/* TODO: embolden arg[0] */}}
+		<p>command: {{range .Args}}{{maybeQuote .}} {{end}}</p>
+		{{end}}
+
+		{{with .Lines}}
+		<div id='output'>
+		{{range .}}
+			<div class='{{.Name}}' title='{{.T}}'>{{.Data}}</div>
+		{{end}}
+		</div>
+		{{end}}
+
+		<script>
+		window.addEventListener("load", function() {
+		   var d = document.getElementById("output");
+		   if (d) {
+		     d.scrollTop = d.scrollHeight;
+		   }
+		});
+		</script>
+`,
+}
+
+var templateFuncs = template.FuncMap{
+	"maybeQuote": maybeQuote,
+}
+
+func maybeQuote(s string) string {
+	if strings.Contains(s, " ") || strings.Contains(s, `"`) {
+		return fmt.Sprintf("%q", s)
+	}
+	return s
+}
