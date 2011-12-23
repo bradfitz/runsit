@@ -35,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	"danga.com/runsit/jsonconfig"
+	"github.com/bradfitz/runsit/jsonconfig"
 )
 
 // Flags.
@@ -501,6 +501,7 @@ func GetTasks() []*Task {
 }
 
 func main() {
+	MaybeRunChildProcess()
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", "localhost:"+strconv.Itoa(*httpPort))
