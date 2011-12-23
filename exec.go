@@ -17,16 +17,100 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/gob"
+	"io"
+	"log"
 	"os"
+	"os/exec"
+	"strings"
+	"syscall"
 )
 
+// LaunchRequest is a subset of exec.Cmd plus the addition of Uid/Gid.
+// This structure is gob'd and base64'd and sent to the child process
+// in the environment variable _RUNSIT_LAUNCH_INFO.  The child then
+// drops root and execs itself to be the requested process.
+type LaunchRequest struct {
+	Uid  int // or 0 to not change
+	Gid  int // or 0 to not change
+	Path string
+	Env  []string
+	Argv []string // must include Path as argv[0]
+	Dir  string
+}
+
+func (lr *LaunchRequest) start(extraFiles []*os.File) (cmd *exec.Cmd, outPipe, errPipe io.ReadCloser, err error) {
+	var buf bytes.Buffer
+	b64enc := base64.NewEncoder(base64.StdEncoding, &buf)
+	err = gob.NewEncoder(b64enc).Encode(lr)
+	b64enc.Close()
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			for _, p := range []io.ReadCloser{outPipe, errPipe} {
+				if p != nil {
+					p.Close()
+				}
+			}
+		}
+	}()
+
+	cmd = exec.Command(os.Args[0])
+	cmd.Env = append(cmd.Env, "_RUNSIT_LAUNCH_INFO="+buf.String())
+	cmd.ExtraFiles = extraFiles
+
+	outPipe, err = cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+	errPipe, err = cmd.StderrPipe()
+	if err != nil {
+		return
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		return
+	}
+
+	return cmd, outPipe, errPipe, nil
+}
+
 func MaybeRunChildProcess() {
-	li := os.Getenv("_RUNSIT_LAUNCH_INFO")
-	if li == "" {
+	lrs := os.Getenv("_RUNSIT_LAUNCH_INFO")
+	if lrs == "" {
 		return
 	}
 	defer os.Exit(2) // should never make it this far, though
-	
-	
-}
 
+	lr := new(LaunchRequest)
+	d := gob.NewDecoder(base64.NewDecoder(base64.StdEncoding, strings.NewReader(lrs)))
+	err := d.Decode(lr)
+	if err != nil {
+		log.Fatalf("Failed to decode LaunchRequest in child: %v", err)
+	}
+
+	if lr.Gid != 0 {
+		if err := syscall.Setgid(lr.Gid); err != nil {
+			log.Fatalf("failed to Setgid(%d): %v", lr.Gid, err)
+		}
+	}
+	if lr.Uid != 0 {
+		if err := syscall.Setuid(lr.Uid); err != nil {
+			log.Fatalf("failed to Setuid(%d): %v", lr.Uid, err)
+		}
+	}
+	if lr.Path != "" {
+		err = os.Chdir(lr.Dir)
+		if err != nil {
+			log.Fatalf("failed to chdir to %q: %v", lr.Dir, err)
+		}
+	}
+	err = os.Exec(lr.Path, lr.Argv, lr.Env)
+	log.Fatalf("failed to exec %q: %v", lr.Path, err)
+}

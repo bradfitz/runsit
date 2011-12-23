@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,7 +112,8 @@ type TaskInstance struct {
 	task      *Task          // set once; not goroutine safe (may only call public methods)
 	startTime time.Time      // set once; immutable
 	config    jsonconfig.Obj // set once; immutable
-	cmd       *exec.Cmd      // set once; immutable
+	lr        *LaunchRequest // set once; immutable (actual command parameters)
+	cmd       *exec.Cmd      // set once; immutable (command parameters to helper process)
 	output    TaskOutput     // internal locking, safe for concurrent access
 }
 
@@ -324,10 +326,11 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		ln.Close()
 		env = append(env, fmt.Sprintf("RUNSIT_PORTFD_%s=%d", portName, 3+len(extraFiles)))
 		extraFiles = append(extraFiles, lf)
+		defer lf.Close()
 	}
 
 	bin := jc.RequiredString("binary")
-	cwd := jc.OptionalString("cwd", "")
+	dir := jc.OptionalString("cwd", "")
 	args := jc.OptionalList("args")
 	if err := jc.Validate(); err != nil {
 		t.Printf("configuration error: %v", err)
@@ -335,9 +338,35 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	}
 	t.config = jc
 
-	_, err := os.Stat(bin)
+	finalBin := bin
+	if !filepath.IsAbs(bin) {
+		dirAbs, err := filepath.Abs(dir)
+		if err != nil {
+			t.Printf("finding absolute path of dir %q: %v", dir, err)
+			return
+		}
+		finalBin = filepath.Clean(filepath.Join(dirAbs, bin))
+	}
+
+	_, err := os.Stat(finalBin)
 	if err != nil {
 		t.Printf("stat of binary %q failed: %v", bin, err)
+		return
+	}
+
+	argv := []string{filepath.Base(bin)}
+	argv = append(argv, args...)
+
+	lr := &LaunchRequest{
+		Path: bin,
+		Env:  env,
+		Dir:  dir,
+		Argv: argv,
+	}
+
+	cmd, outPipe, errPipe, err := lr.start(extraFiles)
+	if err != nil {
+		t.Printf("failed to start: %v", err)
 		return
 	}
 
@@ -345,36 +374,10 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		task:      t,
 		config:    jc,
 		startTime: time.Now(),
-		cmd:       exec.Command(bin, args...),
+		lr:        lr,
+		cmd:       cmd,
 	}
 
-	cmd := instance.cmd
-	cmd.Dir = cwd
-	cmd.Env = env
-	cmd.ExtraFiles = extraFiles
-
-	outPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Printf("StdoutPipe: %v", err)
-		return
-	}
-	errPipe, err := cmd.StderrPipe()
-	if err != nil {
-		t.Printf("StderrPipe: %v", err)
-		outPipe.Close()
-		return
-	}
-
-	err = cmd.Start()
-	for _, f := range extraFiles {
-		f.Close()
-	}
-	if err != nil {
-		outPipe.Close()
-		errPipe.Close()
-		t.Printf("Error starting: %v", err)
-		return
-	}
 	t.Printf("started with PID %d", instance.Pid())
 	t.running = instance
 	go instance.watchPipe(outPipe, "stdout")

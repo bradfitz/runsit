@@ -1,15 +1,15 @@
 {
   "user": "bradfitz",
-  "cwd": "",
+  "cwd": "./test/daemon",
   "standardEnv": false,
   "env": {
       "FOO": "BAR"
   },
-  "binary": "./danga.com/runsit/test/daemon/testdaemon",
+  "binary": "./testdaemon",
   "args": [
     "--port", "8080"
   ],
   "ports": {
-    "web": 8080
+    "web": 8000
   }
 }
