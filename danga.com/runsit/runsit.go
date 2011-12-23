@@ -106,7 +106,7 @@ type Task struct {
 	failures []*TaskInstance // last few failures, oldest first.
 }
 
-// TaskInstance is a particular instance of a running Task.
+// TaskInstance is a particular instance of a running (or now dead) Task.
 type TaskInstance struct {
 	task      *Task          // set once; not goroutine safe (may only call public methods)
 	startTime time.Time      // set once; immutable
