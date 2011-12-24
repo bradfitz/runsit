@@ -1,0 +1,12 @@
+{
+  "user": "bradfitz",
+  "cwd": "./test/daemon",
+  "standardEnv": false,
+  "env": {
+      "FOO": "BAR"
+  },
+  "binary": "./testdaemon",
+  "args": [
+    "--crash"
+  ]
+}

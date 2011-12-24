@@ -27,7 +27,10 @@ import (
 	"time"
 )
 
-var port = flag.Int("port", 8000, "port")
+var (
+	port = flag.Int("port", 8000, "port")
+	crash = flag.Bool("crash", false, "crash on start")
+)
 
 func crashHandler(w http.ResponseWriter, r *http.Request) {
 	status := 2
@@ -61,6 +64,10 @@ func logNoise() {
 
 func main() {
 	flag.Parse()
+
+	if *crash {
+		log.Fatalf("fake crash on start")
+	}
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
