@@ -199,6 +199,8 @@ func (t *Task) loop() {
 			t.stop()
 		case waitMessage:
 			t.onTaskFinished(m)
+		case restartIfStoppedMessage:
+			t.restartIfStopped()
 		}
 	}
 }
@@ -222,6 +224,8 @@ type updateMessage struct {
 }
 
 type stopMessage struct{}
+
+type restartIfStoppedMessage struct{}
 
 type statusRequestMessage struct {
 	resCh chan<- string
@@ -257,10 +261,19 @@ func (t *Task) onTaskFinished(m waitMessage) {
 		// based on how process ended and when it was last
 		// started (prevent crash/restart loops)
 	}
-	if t.config != nil {
-		t.Printf("Restarting")
-		t.updateFromConfig(t.config)
+
+	time.AfterFunc(5*time.Second, func() {
+		t.controlc <- restartIfStoppedMessage{}
+	})
+}
+
+// run in Task.loop
+func (t *Task) restartIfStopped() {
+	if t.running != nil || t.config == nil {
+		return
 	}
+	t.Printf("Restarting")
+	t.updateFromConfig(t.config)
 }
 
 // run in Task.loop
