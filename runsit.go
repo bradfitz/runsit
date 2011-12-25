@@ -48,9 +48,6 @@ var (
 var (
 	logBuf = new(logBuffer)
 	logger = log.New(io.MultiWriter(os.Stderr, logBuf), "", log.Lmicroseconds|log.Lshortfile)
-
-	tasksMu sync.Mutex
-	tasks   = make(map[string]*Task)
 )
 
 const systemLogSize = 64 << 10
@@ -144,7 +141,8 @@ func (in *TaskInstance) Output() []*Line {
 	return in.output.lineSlice()
 }
 
-// TaskOutput is the output
+// TaskOutput is the output of a TaskInstance.
+// Only the last maxKeepLines lines are kept.
 type TaskOutput struct {
 	mu    sync.Mutex
 	lines list.List // of *Line
@@ -205,11 +203,7 @@ func (t *Task) loop() {
 	}
 }
 
-type waitMessage struct {
-	instance *TaskInstance
-	err      error // return from cmd.Wait(), nil, *exec.ExitError, or other type
-}
-
+// Line is a line of output from a TaskInstance.
 type Line struct {
 	T    time.Time
 	Name string // "stdout", "stderr", or "system"
@@ -231,6 +225,15 @@ type statusRequestMessage struct {
 	resCh chan<- string
 }
 
+// waitMessage is sent when a task instance's process finishes.
+type waitMessage struct {
+	instance *TaskInstance
+	err      error // return from cmd.Wait(), nil, *exec.ExitError, or other type
+}
+
+// runningRequestMessage is sent from the web UI (via the
+// RunningInstance accessor) to obtain the currently-running task
+// instance.
 type runningRequestMessage struct {
 	resCh chan<- *TaskInstance
 }
@@ -450,13 +453,15 @@ func (t *Task) Status() string {
 	return <-ch
 }
 
-func (t *Task) RunningInstance() (*TaskInstance, bool) {
+// RunningInstance returns the currently-running task.
+func (t *Task) RunningInstance() (in *TaskInstance, ok bool) {
 	ch := make(chan *TaskInstance, 1)
 	t.controlc <- runningRequestMessage{resCh: ch}
-	in := <-ch
+	in = <-ch
 	return in, in != nil
 }
 
+// Failures returns past few failures of this task.
 func (t *Task) Failures() []*TaskInstance {
 	ch := make(chan []*TaskInstance, 1)
 	t.controlc <- failuresRequestMessage{resCh: ch}
@@ -486,11 +491,16 @@ func watchConfigDir() {
 	}
 }
 
-func GetTask(name string) (*Task, bool) {
+var (
+	tasksMu sync.Mutex               // guards tasks
+	tasks   = make(map[string]*Task) // name -> Task
+)
+
+func GetTask(name string) (t *Task, ok bool) {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
-	t, ok := tasks[name]
-	return t, ok
+	t, ok = tasks[name]
+	return
 }
 
 // GetOrMakeTask returns or create the named task.
@@ -517,7 +527,7 @@ func GetTasks() []*Task {
 }
 
 func main() {
-	MaybeRunChildProcess()
+	MaybeBecomeChildProcess()
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", "localhost:"+strconv.Itoa(*httpPort))

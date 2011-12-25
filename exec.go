@@ -81,7 +81,7 @@ func (lr *LaunchRequest) start(extraFiles []*os.File) (cmd *exec.Cmd, outPipe, e
 	return cmd, outPipe, errPipe, nil
 }
 
-func MaybeRunChildProcess() {
+func MaybeBecomeChildProcess() {
 	lrs := os.Getenv("_RUNSIT_LAUNCH_INFO")
 	if lrs == "" {
 		return
