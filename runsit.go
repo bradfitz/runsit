@@ -99,9 +99,10 @@ type Task struct {
 	controlc chan interface{}
 
 	// State owned by loop's goroutine:
-	config   jsonconfig.Obj // last valid config
-	running  *TaskInstance
-	failures []*TaskInstance // last few failures, oldest first.
+	config    jsonconfig.Obj // last valid config
+	configErr error          // configuration error
+	running   *TaskInstance
+	failures  []*TaskInstance // last few failures, oldest first.
 }
 
 // TaskInstance is a particular instance of a running (or now dead) Task.
@@ -292,7 +293,14 @@ func (t *Task) update(tf TaskFile) {
 }
 
 // run in Task.loop
-func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
+func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
+	configErr := func(format string, args ...interface{}) error {
+		e := fmt.Errorf(format, args...)
+		t.configErr = e
+		return e
+	}
+	startErr := configErr // TODO: make this separate types?
+
 	t.config = nil
 	t.stop()
 
@@ -326,17 +334,14 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 		case string:
 			ln, err = net.Listen("tcp", v)
 		default:
-			t.Printf("port %q value must be a string or integer", portName)
-			return
+			return configErr("port %q value must be a string or integer", portName)
 		}
 		if err != nil {
-			t.Printf("port %q listen error: %v", portName, err)
-			return
+			return startErr("port %q listen error: %v", portName, err)
 		}
 		lf, err := ln.(*net.TCPListener).File()
 		if err != nil {
-			t.Printf("error getting file of port %q listener: %v", portName, err)
-			return
+			return startErr("error getting file of port %q listener: %v", portName, err)
 		}
 		logger.Printf("opened port named %q on %v; fd=%d", portName, vi, lf.Fd())
 		ln.Close()
@@ -349,8 +354,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	dir := jc.OptionalString("cwd", "")
 	args := jc.OptionalList("args")
 	if err := jc.Validate(); err != nil {
-		t.Printf("configuration error: %v", err)
-		return
+		return configErr("configuration error: %v", err)
 	}
 	t.config = jc
 
@@ -358,16 +362,14 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	if !filepath.IsAbs(bin) {
 		dirAbs, err := filepath.Abs(dir)
 		if err != nil {
-			t.Printf("finding absolute path of dir %q: %v", dir, err)
-			return
+			return configErr("finding absolute path of dir %q: %v", dir, err)
 		}
 		finalBin = filepath.Clean(filepath.Join(dirAbs, bin))
 	}
 
-	_, err := os.Stat(finalBin)
+	_, err = os.Stat(finalBin)
 	if err != nil {
-		t.Printf("stat of binary %q failed: %v", bin, err)
-		return
+		return configErr("stat of binary %q failed: %v", bin, err)
 	}
 
 	argv := []string{filepath.Base(bin)}
@@ -382,8 +384,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 
 	cmd, outPipe, errPipe, err := lr.start(extraFiles)
 	if err != nil {
-		t.Printf("failed to start: %v", err)
-		return
+		return startErr("failed to start: %v", err)
 	}
 
 	instance := &TaskInstance{
@@ -399,6 +400,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) {
 	go instance.watchPipe(outPipe, "stdout")
 	go instance.watchPipe(errPipe, "stderr")
 	go instance.awaitDeath()
+	return nil
 }
 
 // run in its own goroutine
