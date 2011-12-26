@@ -84,6 +84,9 @@ func (w *pollingDirWatcher) poll() {
 			if !strings.HasSuffix(name, ".json") {
 				continue
 			}
+			if strings.HasPrefix(name, ".#") {
+				continue
+			}
 			m := fi.ModTime()
 			if em, ok := last[name]; ok && em.Equal(m) {
 				continue
