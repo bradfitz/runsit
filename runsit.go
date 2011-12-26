@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -517,6 +518,11 @@ func GetOrMakeTask(name string) *Task {
 	return t
 }
 
+type byName []*Task
+func (s byName) Len() int { return len(s) }
+func (s byName) Less(i, j int) bool { return s[i].Name < s[j].Name }
+func (s byName) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
 // GetTasks returns all known tasks.
 func GetTasks() []*Task {
 	ts := []*Task{}
@@ -525,6 +531,7 @@ func GetTasks() []*Task {
 	for _, t := range tasks {
 		ts = append(ts, t)
 	}
+	sort.Sort(byName(ts))
 	return ts
 }
 
