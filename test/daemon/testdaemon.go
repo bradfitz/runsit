@@ -53,7 +53,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "euid=%d\n", os.Geteuid())
 	fmt.Fprintf(w, "gid=%d\n", os.Getgid())
 
-	groups, gerr := exec.Command("/usr/bin/groups").CombinedOutput()
+	groups, gerr := exec.Command("groups").CombinedOutput()
 	if gerr != nil {
 		fmt.Fprintf(w, "groups_err=%q\n", gerr)
 	} else {
