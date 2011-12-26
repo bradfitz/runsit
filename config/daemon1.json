@@ -1,9 +1,10 @@
 {
-  "user": "bradfitz",
+  "user": ["_env", "${USER}"],
   "cwd": "./test/daemon",
   "standardEnv": false,
   "env": {
-      "FOO": "BAR"
+      "FOO": "BAR",
+      "WANT_USER": ["_env", "want-${USER}"]
   },
   "binary": "./testdaemon",
   "args": [

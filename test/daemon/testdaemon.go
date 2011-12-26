@@ -23,8 +23,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,6 +52,13 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "uid=%d\n", os.Getuid())
 	fmt.Fprintf(w, "euid=%d\n", os.Geteuid())
 	fmt.Fprintf(w, "gid=%d\n", os.Getgid())
+
+	groups, gerr := exec.Command("/usr/bin/groups").CombinedOutput()
+	if gerr != nil {
+		fmt.Fprintf(w, "groups_err=%q\n", gerr)
+	} else {
+		fmt.Fprintf(w, "groups=%s\n", strings.TrimSpace(string(groups)))
+	}
 
 	env := os.Environ()
 	sort.Strings(env)

@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -307,20 +308,28 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	t.config = nil
 	t.stop()
 
-	user := jc.OptionalString("user", "")
-	curUser := os.Getenv("USER")
-	if user == "" {
-		user = curUser
-	}
-	if user != curUser {
-		panic("TODO: switch user")
-	}
-
 	env := []string{}
 	stdEnv := jc.OptionalBool("standardEnv", true)
-	if stdEnv {
-		env = append(env, fmt.Sprintf("USER=%s", user))
+
+	userStr := jc.OptionalString("user", "")
+	// TODO: group? requires http://code.google.com/p/go/issues/detail?id=2617
+	var runas *user.User
+	if userStr != "" {
+		runas, err = user.Lookup(userStr)
+		if err != nil {
+			return t.configError("%v", err)
+		}
+		if !stdEnv {
+			env = append(env, fmt.Sprintf("USER=%s", userStr))
+			env = append(env, fmt.Sprintf("HOME=%s", runas.HomeDir))
+		}
+	} else {
+		if !stdEnv {
+			env = append(env, fmt.Sprintf("USER=%s", os.Getenv("USER")))
+			env = append(env, fmt.Sprintf("HOME=%s", os.Getenv("HOME")))
+		}
 	}
+
 	envMap := jc.OptionalObject("env")
 	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
@@ -383,6 +392,11 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 		Env:  env,
 		Dir:  dir,
 		Argv: argv,
+	}
+
+	if runas != nil {
+		lr.Uid = runas.Uid
+		lr.Gid = runas.Gid
 	}
 
 	cmd, outPipe, errPipe, err := lr.start(extraFiles)

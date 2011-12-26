@@ -1,5 +1,4 @@
 {
-  "user": "bradfitz",
   "cwd": "./test/daemon",
   "standardEnv": false,
   "env": {
