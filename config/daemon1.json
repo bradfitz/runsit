@@ -1,7 +1,7 @@
 {
   "user": ["_env", "${USER}"],
   "cwd": "./test/daemon",
-  "standardEnv": false,
+  "standardEnv": true,
   "env": {
       "FOO": "BAR",
       "WANT_USER": ["_env", "want-${USER}"]

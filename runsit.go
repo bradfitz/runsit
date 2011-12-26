@@ -319,20 +319,27 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 		if err != nil {
 			return t.configError("%v", err)
 		}
-		if !stdEnv {
+		if stdEnv {
 			env = append(env, fmt.Sprintf("USER=%s", userStr))
 			env = append(env, fmt.Sprintf("HOME=%s", runas.HomeDir))
 		}
 	} else {
-		if !stdEnv {
+		if stdEnv {
 			env = append(env, fmt.Sprintf("USER=%s", os.Getenv("USER")))
 			env = append(env, fmt.Sprintf("HOME=%s", os.Getenv("HOME")))
 		}
 	}
 
 	envMap := jc.OptionalObject("env")
+	envHas := func(k string) bool {
+		_, ok := envMap[k]
+		return ok
+	}
 	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	if stdEnv && !envHas("PATH") {
+		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin")
 	}
 
 	extraFiles := []*os.File{}
