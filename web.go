@@ -18,12 +18,14 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
@@ -35,8 +37,9 @@ func taskList(w http.ResponseWriter, r *http.Request) {
 }
 
 func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
-	in, ok := t.RunningInstance()
-	if !ok {
+	st := t.Status()
+	in := st.Running
+	if in == nil {
 		http.Error(w, "task not running", 500)
 		return
 	}
@@ -76,16 +79,19 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 		"Task":  t,
 	}
 
-	in, ok := t.RunningInstance()
-	if ok {
+	st := t.Status()
+	in := st.Running
+	if in != nil {
 		data["PID"] = in.Pid()
 		data["Output"] = in.Output()
 		data["Cmd"] = in.cmd
+		data["StartTime"] = in.startTime
+		data["StartAgo"] = time.Now().Sub(in.startTime)
 	}
 
 	// list failures in reverse-chronological order
 	{
-		f := t.Failures()
+		f := st.Failures
 		r := make([]*TaskInstance, len(f))
 		for i := range f {
 			r[len(r)-i-1] = f[i]
@@ -168,7 +174,7 @@ var templateHTML = map[string]string{
 		<h2>Running</h2>
 		<ul>
 		{{range .Tasks}}
-			<li><a href='/task/{{.Name}}'>{{.Name}}</a>: {{.Status}}</li>
+			<li><a href='/task/{{.Name}}'>{{.Name}}</a>: {{maybePre .Status.Summary}}</li>
 		{{end}}
 		</ul>
 		<h2>Log</h2>
@@ -184,7 +190,7 @@ var templateHTML = map[string]string{
 	"viewTask": `
 	{{define "body"}}
 		<div>[<a href='/'>Tasks</a>]</div>
-		<p>{{.Task.Status}}</p>
+		<p>{{maybePre .Task.Status.Summary}}</p>
 
 		{{with .Cmd}}
 		{{/* TODO: embolden arg[0] */}}
@@ -193,6 +199,7 @@ var templateHTML = map[string]string{
 
 		{{if .PID}}
 		<h2>Running Instance</h2>
+                <p>Started {{.StartTime}}, {{.StartAgo}} ago.</p>
 		<p>PID={{.PID}} [<a href='/task/{{.Task.Name}}?pid={{.PID}}&mode=kill'>kill</a>]</p>
 		{{end}}
 
@@ -224,11 +231,19 @@ var templateHTML = map[string]string{
 
 var templateFuncs = template.FuncMap{
 	"maybeQuote": maybeQuote,
+	"maybePre": maybePre,
 }
 
 func maybeQuote(s string) string {
 	if strings.Contains(s, " ") || strings.Contains(s, `"`) {
 		return fmt.Sprintf("%q", s)
+	}
+	return s
+}
+
+func maybePre(s string) interface{} {
+	if strings.Contains(s, "\n") {
+		return template.HTML("<pre>" + html.EscapeString(s) + "</pre>")
 	}
 	return s
 }

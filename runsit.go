@@ -114,6 +114,10 @@ type TaskInstance struct {
 	lr        *LaunchRequest // set once; immutable (actual command parameters)
 	cmd       *exec.Cmd      // set once; immutable (command parameters to helper process)
 	output    TaskOutput     // internal locking, safe for concurrent access
+
+	// Set (in awaitDeath) when task finishes running:
+	endTime time.Time
+	waitErr error // typically nil or *exec.ExitError
 }
 
 // ID returns a unique ID string for this task instance.
@@ -189,15 +193,11 @@ func (t *Task) loop() {
 		switch m := cm.(type) {
 		case statusRequestMessage:
 			m.resCh <- t.status()
-		case runningRequestMessage:
-			m.resCh <- t.running
-		case failuresRequestMessage:
-			m.resCh <- t.failures
 		case updateMessage:
 			t.update(m.tf)
 		case stopMessage:
 			t.stop()
-		case waitMessage:
+		case instanceGoneMessage:
 			t.onTaskFinished(m)
 		case restartIfStoppedMessage:
 			t.restartIfStopped()
@@ -223,25 +223,16 @@ type stopMessage struct{}
 
 type restartIfStoppedMessage struct{}
 
+// instanceGoneMessage is sent when a task instance's process finishes,
+// successfully or otherwise. Any error is in instance.waitErr.
+type instanceGoneMessage struct {
+	in *TaskInstance
+}
+
+// statusRequestMessage is sent from the web UI (via the
+// RunningInstance accessor) to obtain the task's current status
 type statusRequestMessage struct {
-	resCh chan<- string
-}
-
-// waitMessage is sent when a task instance's process finishes.
-type waitMessage struct {
-	instance *TaskInstance
-	err      error // return from cmd.Wait(), nil, *exec.ExitError, or other type
-}
-
-// runningRequestMessage is sent from the web UI (via the
-// RunningInstance accessor) to obtain the currently-running task
-// instance.
-type runningRequestMessage struct {
-	resCh chan<- *TaskInstance
-}
-
-type failuresRequestMessage struct {
-	resCh chan<- []*TaskInstance
+	resCh chan<- *TaskStatus
 }
 
 func (t *Task) Update(tf TaskFile) {
@@ -249,9 +240,9 @@ func (t *Task) Update(tf TaskFile) {
 }
 
 // run in Task.loop
-func (t *Task) onTaskFinished(m waitMessage) {
-	m.instance.Printf("Task exited; err=%v", m.err)
-	if m.instance == t.running {
+func (t *Task) onTaskFinished(m instanceGoneMessage) {
+	m.in.Printf("Task exited; err=%v", m.in.waitErr)
+	if m.in == t.running {
 		t.running = nil
 	}
 	const keepFailures = 5
@@ -259,15 +250,20 @@ func (t *Task) onTaskFinished(m waitMessage) {
 		copy(t.failures, t.failures[1:])
 		t.failures = t.failures[:keepFailures-1]
 	}
-	t.failures = append(t.failures, m.instance)
+	t.failures = append(t.failures, m.in)
 
-	if m.err == nil {
-		// TODO: vary sleep time (but not in this goroutine)
-		// based on how process ended and when it was last
-		// started (prevent crash/restart loops)
+	aliveTime := m.in.endTime.Sub(m.in.startTime)
+	restartIn := 0 * time.Second
+	if min := 5 * time.Second; aliveTime < min {
+		restartIn = min - aliveTime
 	}
 
-	time.AfterFunc(5*time.Second, func() {
+	if m.in.waitErr == nil {
+		// TODO: vary restartIn based on whether this instance
+		// and the previous few completed successfully or not?
+	}
+
+	time.AfterFunc(restartIn, func() {
 		t.controlc <- restartIfStoppedMessage{}
 	})
 }
@@ -287,21 +283,27 @@ func (t *Task) update(tf TaskFile) {
 	jc, err := jsonconfig.ReadFile(tf.ConfigFileName())
 	t.stop()
 	if err != nil {
-		t.Printf("Bad config file: %v", err)
+		t.configError("Bad config file: %v", err)
 		return
 	}
 	t.updateFromConfig(jc)
 }
 
 // run in Task.loop
-func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
-	configErr := func(format string, args ...interface{}) error {
-		e := fmt.Errorf(format, args...)
-		t.configErr = e
-		return e
-	}
-	startErr := configErr // TODO: make this separate types?
+func (t *Task) configError(format string, args ...interface{}) error {
+	t.configErr = fmt.Errorf(format, args...)
+	t.Printf("%v", t.configErr)
+	return t.configErr
+}
 
+// run in Task.loop
+func (t *Task) startError(format string, args ...interface{}) error {
+	// TODO: make start error and config error different?
+	return t.configError(format, args...)
+}
+
+// run in Task.loop
+func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	t.config = nil
 	t.stop()
 
@@ -335,14 +337,14 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 		case string:
 			ln, err = net.Listen("tcp", v)
 		default:
-			return configErr("port %q value must be a string or integer", portName)
+			return t.configError("port %q value must be a string or integer", portName)
 		}
 		if err != nil {
-			return startErr("port %q listen error: %v", portName, err)
+			return t.startError("port %q listen error: %v", portName, err)
 		}
 		lf, err := ln.(*net.TCPListener).File()
 		if err != nil {
-			return startErr("error getting file of port %q listener: %v", portName, err)
+			return t.startError("error getting file of port %q listener: %v", portName, err)
 		}
 		logger.Printf("opened port named %q on %v; fd=%d", portName, vi, lf.Fd())
 		ln.Close()
@@ -355,7 +357,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	dir := jc.OptionalString("cwd", "")
 	args := jc.OptionalList("args")
 	if err := jc.Validate(); err != nil {
-		return configErr("configuration error: %v", err)
+		return t.configError("configuration error: %v", err)
 	}
 	t.config = jc
 
@@ -363,14 +365,14 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	if !filepath.IsAbs(bin) {
 		dirAbs, err := filepath.Abs(dir)
 		if err != nil {
-			return configErr("finding absolute path of dir %q: %v", dir, err)
+			return t.configError("finding absolute path of dir %q: %v", dir, err)
 		}
 		finalBin = filepath.Clean(filepath.Join(dirAbs, bin))
 	}
 
 	_, err = os.Stat(finalBin)
 	if err != nil {
-		return configErr("stat of binary %q failed: %v", bin, err)
+		return t.configError("stat of binary %q failed: %v", bin, err)
 	}
 
 	argv := []string{filepath.Base(bin)}
@@ -385,7 +387,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 
 	cmd, outPipe, errPipe, err := lr.start(extraFiles)
 	if err != nil {
-		return startErr("failed to start: %v", err)
+		return t.startError("failed to start: %v", err)
 	}
 
 	instance := &TaskInstance{
@@ -406,8 +408,9 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 
 // run in its own goroutine
 func (in *TaskInstance) awaitDeath() {
-	err := in.cmd.Wait()
-	in.task.controlc <- waitMessage{instance: in, err: err}
+	in.waitErr = in.cmd.Wait()
+	in.endTime = time.Now()
+	in.task.controlc <- instanceGoneMessage{in}
 }
 
 // run in its own goroutine
@@ -450,41 +453,48 @@ func (t *Task) stop() {
 	t.running = nil
 }
 
-func (t *Task) Status() string {
-	ch := make(chan string, 1)
-	t.controlc <- statusRequestMessage{resCh: ch}
-	return <-ch
+// TaskStatus is an one-time snapshot of a task's status, for rendering in
+// the web UI.
+type TaskStatus struct {
+	Running  *TaskInstance   // or nil, if none running
+	StartErr error           // if a task is not running, the reason why it failed to start
+	StartIn  time.Duration   // non-zero if task is rate-limited and will restart in this time
+	Failures []*TaskInstance // past few failures
 }
 
-// RunningInstance returns the currently-running task.
-func (t *Task) RunningInstance() (in *TaskInstance, ok bool) {
-	ch := make(chan *TaskInstance, 1)
-	t.controlc <- runningRequestMessage{resCh: ch}
-	in = <-ch
-	return in, in != nil
-}
-
-// Failures returns past few failures of this task.
-func (t *Task) Failures() []*TaskInstance {
-	ch := make(chan []*TaskInstance, 1)
-	t.controlc <- failuresRequestMessage{resCh: ch}
-	return <-ch
-}
-
-// runs in Task.loop
-func (t *Task) status() string {
-	in := t.running
+func (s *TaskStatus) Summary() string {
+	in := s.Running
 	if in != nil {
-		d := time.Now().Sub(in.startTime)
-		return fmt.Sprintf("running; for %v", d)
+		return "ok"
 	}
-	if t.config == nil {
-		return "not running, no valid config"
+	if err := s.StartErr; err != nil {
+		return err.Error()
 	}
 	// TODO: flesh these not running states out.
 	// e.g. intentionaly stopped, how long we're pausing before
 	// next re-start attempt, etc.
-	return "not running; valid config"
+	return "not running"
+}
+
+// Status returns the task's status.
+func (t *Task) Status() *TaskStatus {
+	ch := make(chan *TaskStatus, 1)
+	t.controlc <- statusRequestMessage{resCh: ch}
+	return <-ch
+}
+
+// runs in Task.loop
+func (t *Task) status() *TaskStatus {
+	failures := make([]*TaskInstance, len(t.failures))
+	copy(failures, t.failures)
+	s := &TaskStatus{
+		Running:  t.running,
+		Failures: failures,
+	}
+	if t.running == nil {
+		s.StartErr = t.configErr
+	}
+	return s
 }
 
 func watchConfigDir() {
@@ -519,9 +529,10 @@ func GetOrMakeTask(name string) *Task {
 }
 
 type byName []*Task
-func (s byName) Len() int { return len(s) }
+
+func (s byName) Len() int           { return len(s) }
 func (s byName) Less(i, j int) bool { return s[i].Name < s[j].Name }
-func (s byName) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+func (s byName) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 // GetTasks returns all known tasks.
 func GetTasks() []*Task {
