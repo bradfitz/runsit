@@ -84,7 +84,7 @@ func taskView(w http.ResponseWriter, r *http.Request) {
 	if in != nil {
 		data["PID"] = in.Pid()
 		data["Output"] = in.Output()
-		data["Cmd"] = in.cmd
+		data["Cmd"] = in.lr
 		data["StartTime"] = in.startTime
 		data["StartAgo"] = time.Now().Sub(in.startTime)
 	}
@@ -194,7 +194,7 @@ var templateHTML = map[string]string{
 
 		{{with .Cmd}}
 		{{/* TODO: embolden arg[0] */}}
-		<p>command: {{range .Args}}{{maybeQuote .}} {{end}}</p>
+		<p>command: {{range .Argv}}{{maybeQuote .}} {{end}}</p>
 		{{end}}
 
 		{{if .PID}}
