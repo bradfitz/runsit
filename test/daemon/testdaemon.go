@@ -23,12 +23,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
 
 var (
-	port = flag.Int("port", 8000, "port")
+	port  = flag.Int("port", 8000, "port")
 	crash = flag.Bool("crash", false, "crash on start")
 )
 
@@ -50,7 +51,9 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "euid=%d\n", os.Geteuid())
 	fmt.Fprintf(w, "gid=%d\n", os.Getgid())
 
-	for _, env := range os.Environ() {
+	env := os.Environ()
+	sort.Strings(env)
+	for _, env := range env {
 		fmt.Fprintf(w, "%s\n", env)
 	}
 }
