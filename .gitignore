@@ -5,4 +5,5 @@ _obj
 a.out
 runsit
 test/daemon/testdaemon
+_cgo_export.h
 

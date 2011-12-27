@@ -322,6 +322,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	stdEnv := jc.OptionalBool("standardEnv", true)
 
 	userStr := jc.OptionalString("user", "")
+	groupStr := jc.OptionalString("group", "")
 	// TODO: group? requires http://code.google.com/p/go/issues/detail?id=2617
 	var runas *user.User
 	if userStr != "" {
@@ -382,6 +383,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	bin := jc.RequiredString("binary")
 	dir := jc.OptionalString("cwd", "")
 	args := jc.OptionalList("args")
+	groups := jc.OptionalList("groups")
 	if err := jc.Validate(); err != nil {
 		return t.configError("configuration error: %v", err)
 	}
@@ -414,6 +416,22 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	if runas != nil {
 		lr.Uid = runas.Uid
 		lr.Gid = runas.Gid
+	}
+	if groupStr != "" {
+		gid, err := LookupGroupId(groupStr)
+		if err != nil {
+			return t.configError("error looking up group %q: %v", groupStr, err)
+		}
+		lr.Gid = gid // primary group
+	}
+
+	// supplemental groups:
+	for _, group := range groups {
+		gid, err := LookupGroupId(group)
+		if err != nil {
+			return t.configError("error looking up group %q: %v", group, err)
+		}
+		lr.Gids = append(lr.Gids, gid)
 	}
 
 	cmd, outPipe, errPipe, err := lr.start(extraFiles)

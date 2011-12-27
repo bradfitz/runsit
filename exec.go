@@ -33,8 +33,9 @@ import (
 // in the environment variable _RUNSIT_LAUNCH_INFO.  The child then
 // drops root and execs itself to be the requested process.
 type LaunchRequest struct {
-	Uid  int // or 0 to not change
-	Gid  int // or 0 to not change
+	Uid  int   // or 0 to not change
+	Gid  int   // or 0 to not change
+	Gids []int // supplemental
 	Path string
 	Env  []string
 	Argv []string // must include Path as argv[0]
@@ -98,6 +99,11 @@ func MaybeBecomeChildProcess() {
 	if lr.Gid != 0 {
 		if err := syscall.Setgid(lr.Gid); err != nil {
 			log.Fatalf("failed to Setgid(%d): %v", lr.Gid, err)
+		}
+	}
+	if len(lr.Gids) != 0 {
+		if err := SetGroups(lr.Gids); err != nil {
+			log.Printf("setgroups: %v", err)
 		}
 	}
 	if lr.Uid != 0 {
