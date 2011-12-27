@@ -35,6 +35,7 @@ type TaskFile interface {
 	Name() string
 
 	// ConfigFileName returns the filename of the JSON file to read.
+	// This returns the empty string when a file has been deleted.
 	// TODO: make this more abstract, a ReadSeekCloser instead?
 	ConfigFileName() string
 }
@@ -79,6 +80,10 @@ func (w *pollingDirWatcher) poll() {
 			time.Sleep(15 * time.Second)
 			continue
 		}
+		deleted := map[string]bool{}
+		for n, _ := range last {
+			deleted[n] = true // assume for now
+		}
 		for _, fi := range fis {
 			name := fi.Name()
 			if !strings.HasSuffix(name, ".json") {
@@ -87,17 +92,23 @@ func (w *pollingDirWatcher) poll() {
 			if strings.HasPrefix(name, ".#") {
 				continue
 			}
+			baseName := name[:len(name)-len(".json")]
+
 			m := fi.ModTime()
-			if em, ok := last[name]; ok && em.Equal(m) {
+			delete(deleted, baseName)
+			if em, ok := last[baseName]; ok && em.Equal(m) {
 				continue
 			}
 			logger.Printf("Updated config file: name = %q, modtime = %v", name, m)
-			last[name] = m
+			last[baseName] = m
 			w.c <- diskFile{
-				baseName: name[:len(name)-len(".json")],
+				baseName: baseName,
 				fileName: filepath.Join(w.dir, name),
 				fi:       fi,
 			}
+		}
+		for bn, _ := range deleted {
+			w.c <- diskFile{baseName: bn}
 		}
 		time.Sleep(5 * time.Second)
 	}

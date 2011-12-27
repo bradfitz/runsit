@@ -94,7 +94,9 @@ func (b *logBuffer) String() string {
 
 // A Task is a named daemon. A single instance of Task exists for the
 // life of the runsit daemon, despite how many times the task has
-// failed and restarted.
+// failed and restarted. (the exception is if the config file for the
+// task is deleted, and then the *Task is removed from the global tasks
+// map and a new one could appear later with the same name)
 type Task struct {
 	// Immutable:
 	Name     string
@@ -281,8 +283,16 @@ func (t *Task) restartIfStopped() {
 // run in Task.loop
 func (t *Task) update(tf TaskFile) {
 	t.config = nil
-	jc, err := jsonconfig.ReadFile(tf.ConfigFileName())
 	t.stop()
+
+	fileName := tf.ConfigFileName()
+	if fileName == "" {
+		t.Printf("config file deleted; stopping")
+		DeleteTask(t.Name)
+		return
+	}
+
+	jc, err := jsonconfig.ReadFile(fileName)
 	if err != nil {
 		t.configError("Bad config file: %v", err)
 		return
@@ -535,6 +545,12 @@ func GetTask(name string) (t *Task, ok bool) {
 	defer tasksMu.Unlock()
 	t, ok = tasks[name]
 	return
+}
+
+func DeleteTask(name string) {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	delete(tasks, name)
 }
 
 // GetOrMakeTask returns or create the named task.
