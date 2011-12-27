@@ -587,7 +587,11 @@ func main() {
 	MaybeBecomeChildProcess()
 	flag.Parse()
 
-	ln, err := net.Listen("tcp", "localhost:"+strconv.Itoa(*httpPort))
+	listenAddr := "localhost"
+	if a := os.Getenv("RUNSIT_LISTEN"); a != "" {
+		listenAddr = a
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listenAddr, *httpPort))
 	if err != nil {
 		logger.Printf("Error listening on port %d: %v", *httpPort, err)
 		os.Exit(1)
