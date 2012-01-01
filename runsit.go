@@ -44,7 +44,7 @@ import (
 // Flags.
 var (
 	httpPort  = flag.Int("http_port", 4762, "HTTP localhost admin port.")
-	configDir = flag.String("config_dir", "config", "Directory containing per-task *.json config files.")
+	configDir = flag.String("config_dir", "/etc/runsit", "Directory containing per-task *.json config files.")
 )
 
 var (
