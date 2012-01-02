@@ -25,25 +25,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unsafe"
 )
-
-/*
-#include <grp.h>
-*/
-import "C"
-
-func SetGroups(gids []int) error {
-	if len(gids) == 0 {
-		return nil
-	}
-	list := make([]C.gid_t, len(gids))
-	for i, gid := range gids {
-		list[i] = C.gid_t(gid)
-	}
-	_, err := C.setgroups(C.size_t(len(list)), (*_Ctype___gid_t)(unsafe.Pointer(&list[0])))
-	return err
-}
 
 func LookupGroupId(group string) (gid int, err error) {
 	f, err := os.Open("/etc/group")

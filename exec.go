@@ -102,7 +102,7 @@ func MaybeBecomeChildProcess() {
 		}
 	}
 	if len(lr.Gids) != 0 {
-		if err := SetGroups(lr.Gids); err != nil {
+		if err := syscall.Setgroups(lr.Gids); err != nil {
 			log.Printf("setgroups: %v", err)
 		}
 	}
