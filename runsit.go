@@ -30,12 +30,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/bradfitz/runsit/jsonconfig"
@@ -199,7 +201,8 @@ func (t *Task) loop() {
 		case updateMessage:
 			t.update(m.tf)
 		case stopMessage:
-			t.stop()
+			err := t.stop()
+			m.resc <- err
 		case instanceGoneMessage:
 			t.onTaskFinished(m)
 		case restartIfStoppedMessage:
@@ -222,7 +225,9 @@ type updateMessage struct {
 	tf TaskFile
 }
 
-type stopMessage struct{}
+type stopMessage struct {
+	resc chan error
+}
 
 type restartIfStoppedMessage struct{}
 
@@ -486,20 +491,29 @@ func (in *TaskInstance) watchPipe(r io.Reader, name string) {
 	panic("unreachable")
 }
 
-func (t *Task) Stop() {
-	t.controlc <- stopMessage{}
+func (t *Task) Stop() error {
+	errc := make(chan error, 1)
+	t.controlc <- stopMessage{errc}
+	return <-errc
 }
 
 // runs in Task.loop
-func (t *Task) stop() {
+func (t *Task) stop() error {
 	in := t.running
 	if in == nil {
-		return
+		return nil
 	}
-	in.Printf("sending SIGKILL")
+
 	// TODO: more graceful kill types
-	in.cmd.Process.Kill()
+	in.Printf("sending SIGKILL")
+
+	// Was: in.cmd.Process.Kill(); but we want to kill
+	// the entire process group.
+	processGroup := 0 - in.Pid()
+	rv := syscall.Kill(processGroup, 9)
+	in.Printf("Kill result: %v", rv)
 	t.running = nil
+	return nil
 }
 
 // TaskStatus is an one-time snapshot of a task's status, for rendering in
@@ -601,6 +615,22 @@ func GetTasks() []*Task {
 	return ts
 }
 
+func handleSignals() {
+	for s := range signal.Incoming {
+		n, _ := s.(os.UnixSignal)
+		const sigInt = 2
+		if n == sigInt {
+			logger.Printf("Got SIGINT; stopping all tasks.")
+			for _, t := range GetTasks() {
+				t.Stop()
+			}
+			logger.Printf("Tasks all stopped after SIGINT; quitting.")
+			os.Exit(0)
+		}
+		logger.Printf("unhandled signal: %T %#v", s, s)
+	}
+}
+
 func main() {
 	MaybeBecomeChildProcess()
 	flag.Parse()
@@ -617,6 +647,7 @@ func main() {
 	}
 	logger.Printf("Listening on port %d", *httpPort)
 
+	go handleSignals()
 	go watchConfigDir()
 	go runWebServer(ln)
 	select {}

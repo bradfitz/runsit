@@ -81,6 +81,11 @@ func main() {
 		log.Fatalf("fake crash on start")
 	}
 
+	cmd := exec.Command("/usr/bin/perl", "-e", `while(1) { print time(), "\n"; sleep 1; }`)
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("error running child: %v", err)
+	}
+
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("error listening on port %d: %v", *port, err)

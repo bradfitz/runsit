@@ -48,7 +48,7 @@ func killTask(w http.ResponseWriter, r *http.Request, t *Task) {
 		http.Error(w, "active task pid doesn't match pid parameter", 500)
 		return
 	}
-	in.cmd.Process.Kill()
+	t.Stop()
 	drawTemplate(w, "killTask", tmplData{
 		"Title": "Kill",
 		"Task":  t,
@@ -231,7 +231,7 @@ var templateHTML = map[string]string{
 
 var templateFuncs = template.FuncMap{
 	"maybeQuote": maybeQuote,
-	"maybePre": maybePre,
+	"maybePre":   maybePre,
 }
 
 func maybeQuote(s string) string {
