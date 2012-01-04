@@ -64,6 +64,9 @@ func (lr *LaunchRequest) start(extraFiles []*os.File) (cmd *exec.Cmd, outPipe, e
 	cmd = exec.Command(os.Args[0])
 	cmd.Env = append(cmd.Env, "_RUNSIT_LAUNCH_INFO="+buf.String())
 	cmd.ExtraFiles = extraFiles
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 
 	outPipe, err = cmd.StdoutPipe()
 	if err != nil {
