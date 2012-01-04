@@ -615,19 +615,34 @@ func GetTasks() []*Task {
 	return ts
 }
 
+const (
+	sigInt   = 2
+	sigTerm  = 15
+	sigChild = 20
+)
+
+var sigName = map[int]string{
+	2:  "SIGINT",
+	15: "SIGTERM",
+}
+
 func handleSignals() {
 	for s := range signal.Incoming {
 		n, _ := s.(os.UnixSignal)
-		const sigInt = 2
-		if n == sigInt {
-			logger.Printf("Got SIGINT; stopping all tasks.")
+		switch n {
+		case sigInt, sigTerm:
+			name := sigName[int(n)]
+			logger.Printf("Got %s; stopping all tasks.", name)
 			for _, t := range GetTasks() {
 				t.Stop()
 			}
-			logger.Printf("Tasks all stopped after SIGINT; quitting.")
+			logger.Printf("Tasks all stopped after %s; quitting.", name)
 			os.Exit(0)
+		case sigChild:
+			// Ignore.
+		default:
+			logger.Printf("unhandled signal: %T %#v", s, s)
 		}
-		logger.Printf("unhandled signal: %T %#v", s, s)
 	}
 }
 
