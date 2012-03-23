@@ -120,6 +120,6 @@ func MaybeBecomeChildProcess() {
 			log.Fatalf("failed to chdir to %q: %v", lr.Dir, err)
 		}
 	}
-	err = os.Exec(lr.Path, lr.Argv, lr.Env)
+	err = syscall.Exec(lr.Path, lr.Argv, lr.Env)
 	log.Fatalf("failed to exec %q: %v", lr.Path, err)
 }

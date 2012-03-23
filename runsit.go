@@ -419,8 +419,8 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	}
 
 	if runas != nil {
-		lr.Uid = runas.Uid
-		lr.Gid = runas.Gid
+		lr.Uid = atoi(runas.Uid)
+		lr.Gid = atoi(runas.Gid)
 	}
 	if groupStr != "" {
 		gid, err := LookupGroupId(groupStr)
@@ -615,30 +615,28 @@ func GetTasks() []*Task {
 	return ts
 }
 
-const (
-	sigInt   = 2
-	sigTerm  = 15
-	sigChild = 20
-)
-
-var sigName = map[int]string{
-	2:  "SIGINT",
-	15: "SIGTERM",
+func atoi(s string) int {
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		panic(err)
+	}
+	return i
 }
 
 func handleSignals() {
-	for s := range signal.Incoming {
-		n, _ := s.(os.UnixSignal)
-		switch n {
-		case sigInt, sigTerm:
-			name := sigName[int(n)]
-			logger.Printf("Got %s; stopping all tasks.", name)
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc)
+
+	for s := range sigc {
+		switch s {
+		case os.Interrupt, os.Signal(syscall.SIGTERM):
+			logger.Printf("Got signal %q; stopping all tasks.", s)
 			for _, t := range GetTasks() {
 				t.Stop()
 			}
-			logger.Printf("Tasks all stopped after %s; quitting.", name)
+			logger.Printf("Tasks all stopped after %s; quitting.", s)
 			os.Exit(0)
-		case sigChild:
+		case os.Signal(syscall.SIGCHLD):
 			// Ignore.
 		default:
 			logger.Printf("unhandled signal: %T %#v", s, s)
