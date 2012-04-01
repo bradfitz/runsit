@@ -21,6 +21,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"os"
 	"net"
 	"net/http"
 	"strconv"
@@ -29,8 +30,9 @@ import (
 )
 
 func taskList(w http.ResponseWriter, r *http.Request) {
+	hostname, _ := os.Hostname()
 	drawTemplate(w, "taskList", tmplData{
-		"Title": "Tasks",
+		"Title": "Tasks on " + hostname,
 		"Tasks": GetTasks(),
 		"Log":   logBuf.String(),
 	})
@@ -121,6 +123,11 @@ func runWebServer(ln net.Listener) {
 type tmplData map[string]interface{}
 
 func drawTemplate(w io.Writer, name string, data tmplData) {
+	if name != "taskList" {
+		hostname, _ := os.Hostname()
+		data["RootLink"] = "/"
+		data["Hostname"] = hostname
+	}
 	err := templates[name].ExecuteTemplate(w, "root", data)
 	if err != nil {
 		logger.Println(err)
@@ -158,9 +165,16 @@ const rootHTML = `
 		.output div.system {
 		   color: #00c;
 		}
+                .topbar {
+                    font-family: sans;
+                    font-size: 10pt;
+                }
 		</style>
 	</head>
 	<body>
+                {{if .RootLink}}
+                    <div id='topbar'>runsit on <a href="{{.RootLink}}">{{.Hostname}}</a>.
+                {{end}}
 		<h1>{{.Title}}</h1>
 		{{template "body" .}}
 	</body>
@@ -189,7 +203,6 @@ var templateHTML = map[string]string{
 `,
 	"viewTask": `
 	{{define "body"}}
-		<div>[<a href='/'>Tasks</a>]</div>
 		<p>{{maybePre .Task.Status.Summary}}</p>
 
 		{{with .Cmd}}
