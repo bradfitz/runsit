@@ -328,12 +328,28 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 
 	userStr := jc.OptionalString("user", "")
 	groupStr := jc.OptionalString("group", "")
+
+	// TODO: medium-term hack to run on linux/arm which lacks cgo support,
+	// so let users define these, even though user.Lookup will fail.
+	userErrUid := jc.OptionalString("userLookupErrUid", "")
+	userErrGid := jc.OptionalString("userLookupErrGid", "")
+	userErrHome := jc.OptionalString("userLookupErrHome", "")
+
 	// TODO: group? requires http://code.google.com/p/go/issues/detail?id=2617
 	var runas *user.User
 	if userStr != "" {
 		runas, err = user.Lookup(userStr)
 		if err != nil {
-			return t.configError("%v", err)
+			if userErrUid != "" {
+				runas = &user.User{
+					Uid:      userErrUid,
+					Gid:      userErrGid,
+					Username: userStr,
+					HomeDir:  userErrHome,
+				}
+			} else {
+				return t.configError("%v", err)
+			}
 		}
 		if stdEnv {
 			env = append(env, fmt.Sprintf("USER=%s", userStr))
