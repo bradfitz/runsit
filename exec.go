@@ -99,7 +99,18 @@ func MaybeBecomeChildProcess() {
 	if err != nil {
 		log.Fatalf("Failed to decode LaunchRequest in child: %v", err)
 	}
-
+	if lr.NumFiles != 0 {
+		var lim syscall.Rlimit
+		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+			log.Fatalf("failed to get NOFILE rlimit: %v", err)
+		}
+		noFile := uint64(lr.NumFiles)
+		lim.Cur = noFile
+		lim.Max = noFile
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+			log.Fatalf("failed to set NOFILE rlimit: %v", err)
+		}
+	}
 	if lr.Gid != 0 {
 		if err := syscall.Setgid(lr.Gid); err != nil {
 			log.Fatalf("failed to Setgid(%d): %v", lr.Gid, err)
@@ -119,18 +130,6 @@ func MaybeBecomeChildProcess() {
 		err = os.Chdir(lr.Dir)
 		if err != nil {
 			log.Fatalf("failed to chdir to %q: %v", lr.Dir, err)
-		}
-	}
-	if lr.NumFiles != 0 {
-		var lim syscall.Rlimit
-		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
-			log.Fatalf("failed to get NOFILE rlimit: %v", err)
-		}
-		noFile := uint64(lr.NumFiles)
-		lim.Cur = noFile
-		lim.Max = noFile
-		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
-			log.Fatalf("failed to set NOFILE rlimit: %v", err)
 		}
 	}
 	err = syscall.Exec(lr.Path, lr.Argv, lr.Env)
