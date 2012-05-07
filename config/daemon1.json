@@ -6,6 +6,7 @@
       "FOO": "BAR",
       "WANT_USER": ["_env", "want-${USER}"]
   },
+  "numFiles": 123,
   "binary": "./testdaemon",
   "args": [
     "--port", "8081"

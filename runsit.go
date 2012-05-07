@@ -405,6 +405,7 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	dir := jc.OptionalString("cwd", "")
 	args := jc.OptionalList("args")
 	groups := jc.OptionalList("groups")
+	numFiles := jc.OptionalInt("numFiles", 0)
 	if err := jc.Validate(); err != nil {
 		return t.configError("configuration error: %v", err)
 	}
@@ -428,10 +429,11 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 	argv = append(argv, args...)
 
 	lr := &LaunchRequest{
-		Path: bin,
-		Env:  env,
-		Dir:  dir,
-		Argv: argv,
+		Path:     bin,
+		Env:      env,
+		Dir:      dir,
+		Argv:     argv,
+		NumFiles: numFiles,
 	}
 
 	if runas != nil {

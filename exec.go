@@ -33,13 +33,14 @@ import (
 // in the environment variable _RUNSIT_LAUNCH_INFO.  The child then
 // drops root and execs itself to be the requested process.
 type LaunchRequest struct {
-	Uid  int   // or 0 to not change
-	Gid  int   // or 0 to not change
-	Gids []int // supplemental
-	Path string
-	Env  []string
-	Argv []string // must include Path as argv[0]
-	Dir  string
+	Uid      int   // or 0 to not change
+	Gid      int   // or 0 to not change
+	Gids     []int // supplemental
+	Path     string
+	Env      []string
+	Argv     []string // must include Path as argv[0]
+	Dir      string
+	NumFiles int // new nfile fd rlimit, or 0 to not change
 }
 
 func (lr *LaunchRequest) start(extraFiles []*os.File) (cmd *exec.Cmd, outPipe, errPipe io.ReadCloser, err error) {
@@ -118,6 +119,18 @@ func MaybeBecomeChildProcess() {
 		err = os.Chdir(lr.Dir)
 		if err != nil {
 			log.Fatalf("failed to chdir to %q: %v", lr.Dir, err)
+		}
+	}
+	if lr.NumFiles != 0 {
+		var lim syscall.Rlimit
+		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+			log.Fatalf("failed to get NOFILE rlimit: %v", err)
+		}
+		noFile := uint64(lr.NumFiles)
+		lim.Cur = noFile
+		lim.Max = noFile
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+			log.Fatalf("failed to set NOFILE rlimit: %v", err)
 		}
 	}
 	err = syscall.Exec(lr.Path, lr.Argv, lr.Env)

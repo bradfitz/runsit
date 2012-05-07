@@ -60,6 +60,9 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "groups=%s\n", strings.TrimSpace(string(groups)))
 	}
 
+	ulimitN, _ := exec.Command("ulimit", "-n").Output()
+	fmt.Fprintf(w, "ulimit_nofiles=%s\n", strings.TrimSpace(string(ulimitN)))
+
 	env := os.Environ()
 	sort.Strings(env)
 	for _, env := range env {
