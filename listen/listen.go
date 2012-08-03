@@ -10,11 +10,22 @@ import (
 	"strings"
 )
 
+func NewFlag(flagName, defaultValue string, serverType string) *Addr {
+	addr := &Addr{
+		s: defaultValue,
+	}
+	flag.Var(addr, flagName, Usage(serverType))
+	return addr
+}
+
 // Usage returns a descriptive usage message for a flag given the name
 // of thing being addressed.
 func Usage(name string) string {
 	if name == "" {
 		name = "Listen address"
+	}
+	if !strings.HasSuffix(name, " address") {
+		name += " address"
 	}
 	return name + "; may be port, :port, ip:port, FD:<fd_num>, or ADDR:<name> to use named runsit ports"
 }
@@ -37,6 +48,8 @@ func (a *Addr) String() string {
 
 // Set implements the flag.Value interface.
 func (a *Addr) Set(v string) error {
+	a.s = v
+
 	// Try the requested port by runsit port name first.
 	fd, ok, err := namedPort(v)
 	if err != nil {
@@ -95,6 +108,13 @@ var _ flag.Value = (*Addr)(nil)
 
 // Listen returns the address's TCP listener.
 func (a *Addr) Listen() (net.Listener, error) {
+	// Start the listener now, if there's a default
+	// and nothing's called Set yet.
+	if a.err == nil && a.ln == nil && a.s != "" {
+		if err := a.Set(a.s); err != nil {
+			return nil, err
+		}
+	}
 	if a.err != nil {
 		return nil, a.err
 	}
