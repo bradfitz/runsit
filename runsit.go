@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// runsit runs stuff.
-//
 // Author: Brad Fitzpatrick <brad@danga.com>
 
+// runsit runs stuff.
 package main
 
 import (
@@ -102,11 +101,13 @@ func (b *logBuffer) String() string {
 type Task struct {
 	// Immutable:
 	Name     string
+	tf       TaskFile
 	controlc chan interface{}
 
 	// State owned by loop's goroutine:
 	config    jsonconfig.Obj // last valid config
 	configErr error          // configuration error
+	errTime   time.Time      // of last configErr
 	running   *TaskInstance
 	failures  []*TaskInstance // last few failures, oldest first.
 }
@@ -194,6 +195,7 @@ func (t *Task) Printf(format string, args ...interface{}) {
 
 func (t *Task) loop() {
 	t.Printf("Starting")
+	defer t.Printf("Loop exiting")
 	for cm := range t.controlc {
 		switch m := cm.(type) {
 		case statusRequestMessage:
@@ -308,6 +310,7 @@ func (t *Task) update(tf TaskFile) {
 // run in Task.loop
 func (t *Task) configError(format string, args ...interface{}) error {
 	t.configErr = fmt.Errorf(format, args...)
+	t.errTime = time.Now()
 	t.Printf("%v", t.configErr)
 	return t.configErr
 }
@@ -388,7 +391,11 @@ func (t *Task) updateFromConfig(jc jsonconfig.Obj) (err error) {
 			return t.configError("port %q value must be a string or integer", portName)
 		}
 		if err != nil {
-			return t.startError("port %q listen error: %v", portName, err)
+			restartIn := 5 * time.Second
+			time.AfterFunc(restartIn, func() {
+				t.controlc <- updateMessage{t.tf}
+			})
+			return t.startError("port %q listen error: %v; restarting in %v", portName, err, restartIn)
 		}
 		lf, err := ln.(*net.TCPListener).File()
 		if err != nil {
@@ -539,6 +546,7 @@ func (t *Task) stop() error {
 type TaskStatus struct {
 	Running  *TaskInstance   // or nil, if none running
 	StartErr error           // if a task is not running, the reason why it failed to start
+	ErrTime  time.Time       // time of StartErr
 	StartIn  time.Duration   // non-zero if task is rate-limited and will restart in this time
 	Failures []*TaskInstance // past few failures
 }
@@ -549,7 +557,7 @@ func (s *TaskStatus) Summary() string {
 		return "ok"
 	}
 	if err := s.StartErr; err != nil {
-		return err.Error()
+		return fmt.Sprintf("Start error (%v ago): %v", time.Now().Sub(s.ErrTime), err)
 	}
 	// TODO: flesh these not running states out.
 	// e.g. intentionaly stopped, how long we're pausing before
@@ -574,13 +582,14 @@ func (t *Task) status() *TaskStatus {
 	}
 	if t.running == nil {
 		s.StartErr = t.configErr
+		s.ErrTime = t.errTime
 	}
 	return s
 }
 
 func watchConfigDir() {
 	for tf := range dirWatcher().Updates() {
-		t := GetOrMakeTask(tf.Name())
+		t := GetOrMakeTask(tf.Name(), tf)
 		go t.Update(tf)
 	}
 }
@@ -604,12 +613,13 @@ func DeleteTask(name string) {
 }
 
 // GetOrMakeTask returns or create the named task.
-func GetOrMakeTask(name string) *Task {
+func GetOrMakeTask(name string, tf TaskFile) *Task {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 	t, ok := tasks[name]
 	if !ok {
 		t = NewTask(name)
+		t.tf = tf
 		tasks[name] = t
 	}
 	return t
