@@ -104,7 +104,7 @@ func MaybeBecomeChildProcess() {
 		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 			log.Fatalf("failed to get NOFILE rlimit: %v", err)
 		}
-		noFile := uint64(lr.NumFiles)
+		noFile := rlim_t(lr.NumFiles)
 		lim.Cur = noFile
 		lim.Max = noFile
 		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
